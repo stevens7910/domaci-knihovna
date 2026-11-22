@@ -84,6 +84,7 @@ export function parseNkcrMarcXml(
   if (parserError.length > 0) {
     throw new MetadataProviderError({
       outcome: 'parse_error',
+      responseSnippet: xmlText,
       detail: 'Neplatný XML formát odpovědi z NK ČR (parsererror).',
     });
   }
@@ -94,6 +95,7 @@ export function parseNkcrMarcXml(
   if (countElements.length === 0 && records.length === 0) {
     throw new MetadataProviderError({
       outcome: 'parse_error',
+      responseSnippet: xmlText,
       detail: 'Odpověď neobsahuje SRU ani MARCXML elementy.',
     });
   }
@@ -104,6 +106,7 @@ export function parseNkcrMarcXml(
     if (Number.isNaN(count)) {
       throw new MetadataProviderError({
         outcome: 'parse_error',
+        responseSnippet: xmlText,
         detail: 'Neplatná hodnota numberOfRecords v SRU odpovědi.',
       });
     }

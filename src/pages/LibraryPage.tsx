@@ -1,4 +1,4 @@
-import { Plus, ScanBarcode } from 'lucide-react';
+import { Plus, RefreshCw, ScanBarcode } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { BackupModal } from '../components/BackupModal';
 import { BookCard } from '../components/BookCard';
@@ -13,7 +13,7 @@ import {
 import { SearchAndFilters } from '../components/SearchAndFilters';
 import { StatsBar } from '../components/StatsBar';
 import { useBooks } from '../hooks/useBooks';
-import { lookupBookMetadata } from '../services/metadata';
+import { clearMetadataCache, lookupBookMetadata } from '../services/metadata';
 import type { Book, NewBookInput, StatusFilter, UpdateBookInput } from '../types';
 import { cleanIsbn, formatIsbn13 } from '../utils/isbn';
 import { normalizeForSearch } from '../utils/text';
@@ -47,6 +47,24 @@ export function LibraryPage({ onNotify }: LibraryPageProps) {
   );
   const [scannerOpen, setScannerOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
+
+  const handleClearPwaCacheAndReload = async () => {
+    setClearingCache(true);
+    try {
+      await clearMetadataCache();
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map((reg) => reg.unregister()));
+      }
+      if ('caches' in window) {
+        const cacheKeys = await window.caches.keys();
+        await Promise.all(cacheKeys.map((key) => window.caches.delete(key)));
+      }
+    } finally {
+      window.location.reload();
+    }
+  };
 
   const selectedBook = useMemo(
     () => books.find((b) => b.id === selectedBookId) ?? null,
@@ -328,6 +346,31 @@ export function LibraryPage({ onNotify }: LibraryPageProps) {
           </section>
         )}
       </main>
+
+      {/* Zápatí s verzí buildu a tlačítkem pro vynucenou obnovu PWA cache */}
+      <footer className="mx-auto mt-10 max-w-5xl px-4 pb-6 sm:px-6">
+        <div className="flex flex-col items-center justify-between gap-2.5 border-t border-stone-200/80 pt-4 text-xs text-stone-400 sm:flex-row">
+          <span className="font-mono">
+            Domácí knihovna •{' '}
+            {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'}
+          </span>
+          <button
+            type="button"
+            disabled={clearingCache}
+            onClick={() => void handleClearPwaCacheAndReload()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-medium text-stone-600 shadow-2xs transition hover:bg-stone-50 hover:text-stone-900 disabled:opacity-60"
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${clearingCache ? 'animate-spin' : ''}`}
+            />
+            <span>
+              {clearingCache
+                ? 'Čistím cache…'
+                : 'Vyčistit cache a obnovit'}
+            </span>
+          </button>
+        </div>
+      </footer>
 
       {/* Plovoucí tlačítka pro mobily */}
       <div className="fixed bottom-6 right-4 z-30 flex items-center gap-2.5 sm:hidden">

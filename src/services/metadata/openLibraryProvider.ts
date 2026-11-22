@@ -114,35 +114,58 @@ export class OpenLibraryProvider implements MetadataProvider {
     try {
       response = await fetch(url, { signal });
     } catch (err) {
-      if (signal?.aborted) {
+      if (
+        signal?.aborted ||
+        (err instanceof Error && err.name === 'AbortError')
+      ) {
         throw new MetadataProviderError({
           outcome: 'timeout',
+          requestUrl: url,
           detail: 'Vypršel časový limit dotazu na Open Library.',
         });
       }
+      const errText =
+        err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       throw new MetadataProviderError({
         outcome: 'cors_or_network',
-        detail:
-          err instanceof Error
-            ? `Chyba sítě při dotazu na Open Library (${err.message}).`
-            : 'Chyba sítě při dotazu na Open Library.',
+        requestUrl: url,
+        responseSnippet: errText,
+        detail: `Chyba sítě při dotazu na Open Library (${errText}).`,
       });
     }
 
     if (!response.ok) {
+      let bodyText: string | undefined;
+      try {
+        if (typeof response.text === 'function') {
+          bodyText = await response.text();
+        }
+      } catch {
+        // Ignorovat
+      }
       throw new MetadataProviderError({
         outcome: 'http_error',
         httpStatus: response.status,
+        requestUrl: url,
+        responseSnippet: bodyText,
         detail: `Open Library API vrátilo HTTP ${response.status}.`,
       });
     }
 
     let payload: OpenLibraryBooksResponse;
+    let rawBody: string | undefined;
     try {
-      payload = (await response.json()) as OpenLibraryBooksResponse;
+      if (typeof response.text === 'function') {
+        rawBody = await response.text();
+        payload = JSON.parse(rawBody) as OpenLibraryBooksResponse;
+      } else {
+        payload = (await response.json()) as OpenLibraryBooksResponse;
+      }
     } catch {
       throw new MetadataProviderError({
         outcome: 'parse_error',
+        requestUrl: url,
+        responseSnippet: rawBody,
         detail: 'Odpověď Open Library není platný JSON.',
       });
     }
@@ -150,6 +173,8 @@ export class OpenLibraryProvider implements MetadataProvider {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       throw new MetadataProviderError({
         outcome: 'parse_error',
+        requestUrl: url,
+        responseSnippet: rawBody,
         detail: 'Neplatná struktura JSON odpovědi z Open Library.',
       });
     }

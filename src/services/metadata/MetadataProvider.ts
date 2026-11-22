@@ -33,7 +33,16 @@ export interface ProviderAttemptDiagnostic {
   httpStatus?: number;
   requestUrl?: string;
   detail: string;
+  errorMessage?: string;
+  responseSnippet?: string;
   durationMs?: number;
+}
+
+export function createResponseSnippet(raw?: string, maxLength = 200): string | undefined {
+  if (!raw || typeof raw !== 'string') return undefined;
+  const compact = raw.replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}…` : compact;
 }
 
 export class MetadataProviderError extends Error {
@@ -41,12 +50,14 @@ export class MetadataProviderError extends Error {
   readonly httpStatus?: number;
   readonly requestUrl?: string;
   readonly detail: string;
+  readonly responseSnippet?: string;
 
   constructor(options: {
     outcome: Exclude<ProviderOutcome, 'ok' | 'empty'>;
     detail: string;
     httpStatus?: number;
     requestUrl?: string;
+    responseSnippet?: string;
   }) {
     super(options.detail);
     this.name = 'MetadataProviderError';
@@ -54,6 +65,7 @@ export class MetadataProviderError extends Error {
     this.httpStatus = options.httpStatus;
     this.requestUrl = options.requestUrl;
     this.detail = options.detail;
+    this.responseSnippet = createResponseSnippet(options.responseSnippet);
   }
 }
 

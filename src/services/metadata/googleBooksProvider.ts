@@ -64,35 +64,58 @@ export class GoogleBooksProvider implements MetadataProvider {
     try {
       response = await fetch(url, { signal });
     } catch (err) {
-      if (signal?.aborted) {
+      if (
+        signal?.aborted ||
+        (err instanceof Error && err.name === 'AbortError')
+      ) {
         throw new MetadataProviderError({
           outcome: 'timeout',
+          requestUrl: url,
           detail: 'Vypršel časový limit dotazu na Google Books.',
         });
       }
+      const errText =
+        err instanceof Error ? `${err.name}: ${err.message}` : String(err);
       throw new MetadataProviderError({
         outcome: 'cors_or_network',
-        detail:
-          err instanceof Error
-            ? `Chyba sítě při dotazu na Google Books (${err.message}).`
-            : 'Chyba sítě při dotazu na Google Books.',
+        requestUrl: url,
+        responseSnippet: errText,
+        detail: `Chyba sítě při dotazu na Google Books (${errText}).`,
       });
     }
 
     if (!response.ok) {
+      let bodyText: string | undefined;
+      try {
+        if (typeof response.text === 'function') {
+          bodyText = await response.text();
+        }
+      } catch {
+        // Ignorovat
+      }
       throw new MetadataProviderError({
         outcome: 'http_error',
         httpStatus: response.status,
+        requestUrl: url,
+        responseSnippet: bodyText,
         detail: `Google Books API vrátilo HTTP ${response.status}.`,
       });
     }
 
     let payload: GoogleBooksResponse;
+    let rawBody: string | undefined;
     try {
-      payload = (await response.json()) as GoogleBooksResponse;
+      if (typeof response.text === 'function') {
+        rawBody = await response.text();
+        payload = JSON.parse(rawBody) as GoogleBooksResponse;
+      } else {
+        payload = (await response.json()) as GoogleBooksResponse;
+      }
     } catch {
       throw new MetadataProviderError({
         outcome: 'parse_error',
+        requestUrl: url,
+        responseSnippet: rawBody,
         detail: 'Odpověď Google Books není platný JSON.',
       });
     }
@@ -100,6 +123,8 @@ export class GoogleBooksProvider implements MetadataProvider {
     if (!payload || typeof payload !== 'object') {
       throw new MetadataProviderError({
         outcome: 'parse_error',
+        requestUrl: url,
+        responseSnippet: rawBody,
         detail: 'Prázdný nebo neplatný JSON objekt z Google Books.',
       });
     }

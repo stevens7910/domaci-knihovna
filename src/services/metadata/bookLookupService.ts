@@ -204,6 +204,8 @@ async function executeProviderAttempt(
           httpStatus: err.httpStatus,
           requestUrl: err.requestUrl ?? requestUrl,
           detail: err.detail,
+          errorMessage: err.message,
+          responseSnippet: err.responseSnippet,
           durationMs,
         },
       };
@@ -221,6 +223,7 @@ async function executeProviderAttempt(
           httpStatus: Number.parseInt(isHttpMatch[1], 10),
           requestUrl,
           detail: message,
+          errorMessage: message,
           durationMs,
         },
       };
@@ -234,6 +237,7 @@ async function executeProviderAttempt(
         outcome: controller.signal.aborted ? 'timeout' : 'cors_or_network',
         requestUrl,
         detail: message,
+        errorMessage: message,
         durationMs,
       },
     };

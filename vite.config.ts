@@ -8,8 +8,13 @@ const basePath =
   (globalThis as { process?: { env?: Record<string, string | undefined> } })
     .process?.env?.VITE_BASE_PATH || './';
 
+const appVersion = `build ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
 export default defineConfig({
   base: basePath,
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   plugins: [
     react(),
     tailwindcss(),

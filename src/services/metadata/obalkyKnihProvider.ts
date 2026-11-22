@@ -63,12 +63,19 @@ export class ObalkyKnihProvider implements MetadataProvider {
     });
 
     let payload: unknown;
+    let rawBody: string | undefined;
     try {
-      payload = await response.json();
+      if (typeof response.text === 'function') {
+        rawBody = await response.text();
+        payload = JSON.parse(rawBody);
+      } else {
+        payload = await response.json();
+      }
     } catch {
       throw new MetadataProviderError({
         outcome: 'parse_error',
         requestUrl: this.getRequestUrl(isbn13),
+        responseSnippet: rawBody,
         detail: 'Odpověď ze serveru Obálky knih není platný JSON.',
       });
     }
@@ -77,6 +84,7 @@ export class ObalkyKnihProvider implements MetadataProvider {
       throw new MetadataProviderError({
         outcome: 'parse_error',
         requestUrl: this.getRequestUrl(isbn13),
+        responseSnippet: rawBody ?? JSON.stringify(payload),
         detail: 'Očekáváno JSON pole ze serveru Obálky knih.',
       });
     }

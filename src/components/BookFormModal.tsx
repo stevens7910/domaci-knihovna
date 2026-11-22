@@ -1,8 +1,10 @@
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Copy,
   Database,
   ExternalLink,
   Info,
@@ -113,6 +115,7 @@ export function BookFormModal({
   const [lookupVariants, setLookupVariants] =
     useState<IsbnSearchVariants | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
   const [coverPreviewError, setCoverPreviewError] = useState(false);
 
   const runIsbnLookup = useCallback(async (rawIsbnToLookup: string) => {
@@ -256,6 +259,50 @@ export function BookFormModal({
   }, [open, isbnValidation, editingBook?.id, onFindDuplicates]);
 
   if (!open) return null;
+
+  const handleCopyDiagnostics = async () => {
+    const payload = {
+      appVersion:
+        typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev',
+      timestamp: new Date().toISOString(),
+      online: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
+      userAgent:
+        typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+      isbnInput,
+      isbnVariants: lookupVariants,
+      status: lookupStatus,
+      message: lookupMessage,
+      diagnostics: lookupDiagnostics.map((d) => ({
+        provider: d.provider,
+        url: d.requestUrl,
+        status: d.outcome,
+        httpStatus: d.httpStatus,
+        durationMs: d.durationMs,
+        errorMessage: d.errorMessage ?? d.detail,
+        responseSnippet: d.responseSnippet,
+      })),
+    };
+
+    const jsonText = JSON.stringify(payload, null, 2);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(jsonText);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = jsonText;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setDiagnosticsCopied(true);
+      window.setTimeout(() => setDiagnosticsCopied(false), 2500);
+    } catch {
+      // Ignorovat chybu schránky
+    }
+  };
 
   const handleLookupIsbn = async () => {
     await runIsbnLookup(isbnInput);
@@ -523,26 +570,44 @@ export function BookFormModal({
                 </div>
               )}
 
-            {/* Rozklikávací detail: Technický stav zdrojů */}
+            {/* Rozklikávací detail: Diagnostika vyhledávání */}
             {!lookingUp && lookupDiagnostics.length > 0 && (
               <div className="mt-2.5 rounded-xl border border-stone-200 bg-white/90 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setShowDiagnostics((prev) => !prev)}
-                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left font-medium text-stone-700 transition hover:bg-stone-50 rounded-xl"
-                >
-                  <span className="inline-flex items-center gap-1.5">
+                <div className="flex items-center justify-between gap-2 px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDiagnostics((prev) => !prev)}
+                    className="flex flex-1 items-center gap-1.5 text-left font-medium text-stone-700 transition hover:text-stone-950"
+                  >
                     <Wrench className="h-3.5 w-3.5 text-stone-500" />
                     <span>
-                      Technický stav zdrojů ({lookupDiagnostics.length})
+                      Diagnostika vyhledávání ({lookupDiagnostics.length})
                     </span>
-                  </span>
-                  {showDiagnostics ? (
-                    <ChevronUp className="h-4 w-4 text-stone-400" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4 text-stone-400" />
-                  )}
-                </button>
+                    {showDiagnostics ? (
+                      <ChevronUp className="h-4 w-4 text-stone-400" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-stone-400" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyDiagnostics()}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-stone-200 bg-stone-50 px-2.5 py-1 text-[11px] font-semibold text-stone-700 transition hover:bg-stone-100"
+                  >
+                    {diagnosticsCopied ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-emerald-600" />
+                        <span className="text-emerald-700">Zkopírováno</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3.5 w-3.5 text-stone-500" />
+                        <span>Zkopírovat diagnostiku</span>
+                      </>
+                    )}
+                  </button>
+                </div>
 
                 {showDiagnostics && (
                   <div className="border-t border-stone-100 px-3 py-2.5 space-y-2">
@@ -582,6 +647,11 @@ export function BookFormModal({
                             {diag.provider}
                           </span>
                           <div className="flex items-center gap-1.5">
+                            {diag.durationMs !== undefined && (
+                              <span className="font-mono text-[10px] text-stone-500">
+                                {diag.durationMs} ms
+                              </span>
+                            )}
                             {diag.httpStatus !== undefined && (
                               <span className="rounded bg-stone-200/80 px-1.5 py-0.5 font-mono text-[10px] text-stone-700">
                                 HTTP {diag.httpStatus}
@@ -596,13 +666,18 @@ export function BookFormModal({
                             </span>
                           </div>
                         </div>
-                        <p className="mt-1 text-[11px] leading-snug text-stone-600">
+                        <p className="mt-1 text-[11px] leading-snug text-stone-700">
                           {diag.detail}
                         </p>
                         {diag.requestUrl && (
                           <p className="mt-1 break-all font-mono text-[10px] text-stone-400">
-                            Dotaz: {decodeURIComponent(diag.requestUrl)}
+                            URL: {decodeURIComponent(diag.requestUrl)}
                           </p>
+                        )}
+                        {diag.responseSnippet && (
+                          <pre className="mt-1.5 max-h-24 overflow-x-auto whitespace-pre-wrap break-all rounded border border-stone-200/80 bg-white p-1.5 font-mono text-[10px] text-stone-600">
+                            {diag.responseSnippet}
+                          </pre>
                         )}
                       </div>
                     ))}

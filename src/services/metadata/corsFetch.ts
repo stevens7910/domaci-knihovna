@@ -1,4 +1,7 @@
-import { MetadataProviderError } from './MetadataProvider';
+import {
+  createResponseSnippet,
+  MetadataProviderError,
+} from './MetadataProvider';
 
 export const BOOK_PROXY_STORAGE_KEY = 'domaci_knihovna_book_proxy_url';
 
@@ -56,7 +59,8 @@ export function buildRequestUrl(options: {
 /**
  * Provede HTTP GET požadavek buď přes vlastní VITE_BOOK_PROXY_URL (pokud je nastaveno),
  * nebo přímo na cílový server.
- * Při selhání vyhodí strukturovanou MetadataProviderError ('cors_or_network', 'http_error', 'timeout').
+ * Při selhání vyhodí strukturovanou MetadataProviderError ('cors_or_network', 'http_error', 'timeout')
+ * včetně prvních 200 znaků odpovědi/chyby pro mobilní diagnostiku.
  */
 export async function fetchWithBookProxy(options: {
   target: ProxyTargetId;
@@ -71,7 +75,10 @@ export async function fetchWithBookProxy(options: {
   try {
     response = await fetch(requestUrl, { signal: options.signal });
   } catch (err) {
-    if (options.signal?.aborted) {
+    if (
+      options.signal?.aborted ||
+      (err instanceof Error && err.name === 'AbortError')
+    ) {
       throw new MetadataProviderError({
         outcome: 'timeout',
         requestUrl,
@@ -79,10 +86,12 @@ export async function fetchWithBookProxy(options: {
       });
     }
 
-    const reason = err instanceof Error ? err.message : 'Network error';
+    const reason =
+      err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     throw new MetadataProviderError({
       outcome: 'cors_or_network',
       requestUrl,
+      responseSnippet: createResponseSnippet(reason),
       detail: usingProxy
         ? `Chyba spojení s vlastním proxy serverem (${reason}).`
         : `Přímý dotaz zablokován CORS politikou nebo chybou sítě (VITE_BOOK_PROXY_URL není nastaveno).`,
@@ -90,10 +99,20 @@ export async function fetchWithBookProxy(options: {
   }
 
   if (!response.ok) {
+    let bodySnippet: string | undefined;
+    try {
+      if (typeof response.text === 'function') {
+        bodySnippet = createResponseSnippet(await response.text());
+      }
+    } catch {
+      // Ignorovat chybu čtení chybového těla
+    }
+
     throw new MetadataProviderError({
       outcome: 'http_error',
       httpStatus: response.status,
       requestUrl,
+      responseSnippet: bodySnippet,
       detail: `Server vrátil HTTP ${response.status}.`,
     });
   }
