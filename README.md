@@ -45,3 +45,18 @@ Přístup ke kameře (`getUserMedia`) i instalace PWA (Service Worker) vyžaduj�
 1. Sestavte projekt příkazem `npm run build` (případně nastavte `VITE_BASE_PATH=/nazev-repozitare/`).
 2. Publikujte obsah složky `dist/` do větve `gh-pages` (např. přes `gh-pages` nebo GitHub Actions workflow).
 3. GitHub Pages automaticky servíruje web přes HTTPS.
+
+---
+
+## Vlastní CORS Proxy pro české katalogy (`VITE_BOOK_PROXY_URL`)
+
+České knižní katalogy (**Národní knihovna ČR – `aleph.nkp.cz`**) neposílají hlavičku `Access-Control-Allow-Origin` pro přímé dotazy z prohlížeče. Aplikace záměrně **nepoužívá nespolehlivé veřejné CORS proxy** a při selhání přímého dotazu zobrazí v detailu *„Technický stav zdrojů“* přesný diagnostický stav (`cors_or_network`, `http_error`, `parse_error`, `timeout`, `empty`, `ok`).
+
+Pro 100% spolehlivé dotazování NK ČR a Obálek knih je v [proxy/cloudflare-worker.js](proxy/cloudflare-worker.js) připravena šablona pro bezplatný **Cloudflare Worker**:
+
+1. V Cloudflare Dashboardu vytvořte nový Worker a vložte kód ze souboru `proxy/cloudflare-worker.js`.
+2. Nastavte výslednou URL Workeru do proměnné prostředí `VITE_BOOK_PROXY_URL` (v `.env.local` nebo v GitHub Actions Variables):
+   ```env
+   VITE_BOOK_PROXY_URL=https://domaci-knihovna-proxy.vase-subdomena.workers.dev
+   ```
+

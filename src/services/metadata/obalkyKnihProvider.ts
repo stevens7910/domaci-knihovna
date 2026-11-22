@@ -1,7 +1,11 @@
 import { cleanBookDescription } from '../../utils/text';
-import { fetchWithCorsFallback } from './corsFetch';
+import { fetchWithBookProxy } from './corsFetch';
 import { sanitizeHttpsUrl } from './googleBooksProvider';
-import type { BookMetadata, MetadataProvider } from './MetadataProvider';
+import {
+  MetadataProviderError,
+  type BookMetadata,
+  type MetadataProvider,
+} from './MetadataProvider';
 
 interface ObalkyKnihApiEntry {
   cover_preview510_url?: string;
@@ -19,6 +23,11 @@ interface ObalkyKnihApiEntry {
 export class ObalkyKnihProvider implements MetadataProvider {
   readonly id = 'obalkyknih' as const;
   readonly displayName = 'Obálky knih';
+  private readonly proxyBaseUrl?: string;
+
+  constructor(proxyBaseUrl?: string) {
+    this.proxyBaseUrl = proxyBaseUrl;
+  }
 
   async fetchByIsbn(
     isbn13: string,
@@ -26,14 +35,32 @@ export class ObalkyKnihProvider implements MetadataProvider {
   ): Promise<Partial<BookMetadata> | null> {
     const multiParam = encodeURIComponent(JSON.stringify([{ isbn: isbn13 }]));
     const apiUrl = `https://cache.obalkyknih.cz/api/books?multi=${multiParam}`;
-    const response = await fetchWithCorsFallback(apiUrl, signal);
+    const response = await fetchWithBookProxy({
+      target: 'obalkyknih',
+      isbn13,
+      directUrl: apiUrl,
+      signal,
+      proxyBaseUrl: this.proxyBaseUrl,
+    });
 
-    if (!response.ok) {
-      throw new Error(`Obálky knih API vrátilo HTTP ${response.status}`);
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new MetadataProviderError({
+        outcome: 'parse_error',
+        detail: 'Odpověď ze serveru Obálky knih není platný JSON.',
+      });
     }
 
-    const payload = (await response.json()) as ObalkyKnihApiEntry[] | unknown;
-    if (!Array.isArray(payload) || payload.length === 0) {
+    if (!Array.isArray(payload)) {
+      throw new MetadataProviderError({
+        outcome: 'parse_error',
+        detail: 'Očekáváno JSON pole ze serveru Obálky knih.',
+      });
+    }
+
+    if (payload.length === 0) {
       return null;
     }
 

@@ -18,8 +18,43 @@ export interface BookMetadata {
   source: Exclude<BookSource, 'manual'>;
 }
 
+export type ProviderOutcome =
+  | 'ok'
+  | 'empty'
+  | 'cors_or_network'
+  | 'http_error'
+  | 'parse_error'
+  | 'timeout';
+
+export interface ProviderAttemptDiagnostic {
+  providerId: Exclude<BookSource, 'manual'>;
+  provider: string;
+  outcome: ProviderOutcome;
+  httpStatus?: number;
+  detail: string;
+  durationMs?: number;
+}
+
+export class MetadataProviderError extends Error {
+  readonly outcome: Exclude<ProviderOutcome, 'ok' | 'empty'>;
+  readonly httpStatus?: number;
+  readonly detail: string;
+
+  constructor(options: {
+    outcome: Exclude<ProviderOutcome, 'ok' | 'empty'>;
+    detail: string;
+    httpStatus?: number;
+  }) {
+    super(options.detail);
+    this.name = 'MetadataProviderError';
+    this.outcome = options.outcome;
+    this.httpStatus = options.httpStatus;
+    this.detail = options.detail;
+  }
+}
+
 /**
- * Společné rozhraní pro poskytovatele knižních metadat (Google Books, Open Library, vlastní proxy pro NK ČR).
+ * Společné rozhraní pro poskytovatele knižních metadat (NK ČR, Obálky knih, Google Books, Open Library).
  */
 export interface MetadataProvider {
   readonly id: Exclude<BookSource, 'manual'>;

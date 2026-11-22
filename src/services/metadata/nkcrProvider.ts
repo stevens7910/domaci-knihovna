@@ -1,6 +1,10 @@
 import { cleanBookDescription } from '../../utils/text';
-import { fetchWithCorsFallback } from './corsFetch';
-import type { BookMetadata, MetadataProvider } from './MetadataProvider';
+import { fetchWithBookProxy } from './corsFetch';
+import {
+  MetadataProviderError,
+  type BookMetadata,
+  type MetadataProvider,
+} from './MetadataProvider';
 
 /**
  * Odstraní koncovou MARC21 interpunkci (/, :, ;, ,) a přebytečné mezery.
@@ -55,12 +59,20 @@ function getSubfieldValues(field: Element, code: string): string[] {
 
 /**
  * Parsuje MARCXML odpověď ze SRU rozhraní Národní knihovny ČR.
+ * Vyhodí MetadataProviderError('parse_error'), pokud vstup není platný MARCXML / SRU XML dokument.
  */
 export function parseNkcrMarcXml(
   xmlText: string,
   isbn13: string
 ): Partial<BookMetadata> | null {
-  if (!xmlText || typeof DOMParser === 'undefined') {
+  if (!xmlText || !xmlText.trim()) {
+    throw new MetadataProviderError({
+      outcome: 'parse_error',
+      detail: 'Prázdná odpověď místo MARCXML dokumentu.',
+    });
+  }
+
+  if (typeof DOMParser === 'undefined') {
     return null;
   }
 
@@ -69,18 +81,36 @@ export function parseNkcrMarcXml(
 
   const parserError = doc.getElementsByTagName('parsererror');
   if (parserError.length > 0) {
-    return null;
+    throw new MetadataProviderError({
+      outcome: 'parse_error',
+      detail: 'Neplatný XML formát odpovědi z NK ČR (parsererror).',
+    });
   }
 
   const countElements = getElementsByLocalName(doc, 'numberOfRecords');
+  const records = getElementsByLocalName(doc, 'record');
+
+  if (countElements.length === 0 && records.length === 0) {
+    throw new MetadataProviderError({
+      outcome: 'parse_error',
+      detail: 'Odpověď neobsahuje SRU ani MARCXML elementy.',
+    });
+  }
+
   if (countElements.length > 0) {
-    const count = Number.parseInt(countElements[0].textContent?.trim() ?? '0', 10);
+    const rawCount = countElements[0].textContent?.trim() ?? '';
+    const count = Number.parseInt(rawCount, 10);
+    if (Number.isNaN(count)) {
+      throw new MetadataProviderError({
+        outcome: 'parse_error',
+        detail: 'Neplatná hodnota numberOfRecords v SRU odpovědi.',
+      });
+    }
     if (count === 0) {
       return null;
     }
   }
 
-  const records = getElementsByLocalName(doc, 'record');
   const record = records[0];
   if (!record) {
     return null;
@@ -187,17 +217,24 @@ export function parseNkcrMarcXml(
 export class NkcrProvider implements MetadataProvider {
   readonly id = 'nkcr' as const;
   readonly displayName = 'NK ČR';
+  private readonly proxyBaseUrl?: string;
+
+  constructor(proxyBaseUrl?: string) {
+    this.proxyBaseUrl = proxyBaseUrl;
+  }
 
   async fetchByIsbn(
     isbn13: string,
     signal?: AbortSignal
   ): Promise<Partial<BookMetadata> | null> {
     const sruUrl = `https://aleph.nkp.cz/web/sru/skc?version=1.1&operation=searchRetrieve&query=isb%3D${encodeURIComponent(isbn13)}&recordSchema=marcxml`;
-    const response = await fetchWithCorsFallback(sruUrl, signal);
-
-    if (!response.ok) {
-      throw new Error(`NK ČR SRU API vrátilo HTTP ${response.status}`);
-    }
+    const response = await fetchWithBookProxy({
+      target: 'nkcr',
+      isbn13,
+      directUrl: sruUrl,
+      signal,
+      proxyBaseUrl: this.proxyBaseUrl,
+    });
 
     const xmlText = await response.text();
     return parseNkcrMarcXml(xmlText, isbn13);

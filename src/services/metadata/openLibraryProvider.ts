@@ -1,7 +1,11 @@
 import { isbn13ToIsbn10 } from '../../utils/isbn';
 import { cleanBookDescription } from '../../utils/text';
 import { parsePublishedYear, sanitizeHttpsUrl } from './googleBooksProvider';
-import type { BookMetadata, MetadataProvider } from './MetadataProvider';
+import {
+  MetadataProviderError,
+  type BookMetadata,
+  type MetadataProvider,
+} from './MetadataProvider';
 
 type OpenLibraryTextValue = string | { value?: string } | undefined;
 
@@ -99,14 +103,52 @@ export class OpenLibraryProvider implements MetadataProvider {
     const bibKeys = bibKey10 ? `${bibKey13},${bibKey10}` : bibKey13;
 
     const url = `https://openlibrary.org/api/books?bibkeys=${bibKeys}&format=json&jscmd=data`;
-    const response = await fetch(url, { signal });
 
-    if (!response.ok) {
-      throw new Error(`Open Library API vrátilo HTTP ${response.status}`);
+    let response: Response;
+    try {
+      response = await fetch(url, { signal });
+    } catch (err) {
+      if (signal?.aborted) {
+        throw new MetadataProviderError({
+          outcome: 'timeout',
+          detail: 'Vypršel časový limit dotazu na Open Library.',
+        });
+      }
+      throw new MetadataProviderError({
+        outcome: 'cors_or_network',
+        detail:
+          err instanceof Error
+            ? `Chyba sítě při dotazu na Open Library (${err.message}).`
+            : 'Chyba sítě při dotazu na Open Library.',
+      });
     }
 
-    const payload = (await response.json()) as OpenLibraryBooksResponse;
-    const entry = payload?.[bibKey13] ?? (bibKey10 ? payload?.[bibKey10] : undefined);
+    if (!response.ok) {
+      throw new MetadataProviderError({
+        outcome: 'http_error',
+        httpStatus: response.status,
+        detail: `Open Library API vrátilo HTTP ${response.status}.`,
+      });
+    }
+
+    let payload: OpenLibraryBooksResponse;
+    try {
+      payload = (await response.json()) as OpenLibraryBooksResponse;
+    } catch {
+      throw new MetadataProviderError({
+        outcome: 'parse_error',
+        detail: 'Odpověď Open Library není platný JSON.',
+      });
+    }
+
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw new MetadataProviderError({
+        outcome: 'parse_error',
+        detail: 'Neplatná struktura JSON odpovědi z Open Library.',
+      });
+    }
+
+    const entry = payload[bibKey13] ?? (bibKey10 ? payload[bibKey10] : undefined);
 
     if (!entry) {
       return null;

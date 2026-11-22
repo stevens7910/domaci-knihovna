@@ -1,6 +1,8 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Database,
   ExternalLink,
   Info,
@@ -8,6 +10,7 @@ import {
   ScanBarcode,
   Search,
   Sparkles,
+  Wrench,
   X,
 } from 'lucide-react';
 import {
@@ -22,6 +25,8 @@ import {
 import {
   lookupBookMetadata,
   type BookLookupStatus,
+  type ProviderAttemptDiagnostic,
+  type ProviderOutcome,
 } from '../services/metadata';
 import {
   BOOK_SOURCE_LABELS,
@@ -47,6 +52,15 @@ interface BookFormModalProps {
 }
 
 const STATUS_OPTIONS: ReadingStatus[] = ['unread', 'reading', 'read', 'lent'];
+
+const OUTCOME_BADGE_STYLES: Record<ProviderOutcome, string> = {
+  ok: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+  empty: 'bg-stone-100 text-stone-600 border-stone-200',
+  cors_or_network: 'bg-red-100 text-red-800 border-red-200',
+  http_error: 'bg-amber-100 text-amber-900 border-amber-200',
+  parse_error: 'bg-rose-100 text-rose-800 border-rose-200',
+  timeout: 'bg-orange-100 text-orange-800 border-orange-200',
+};
 
 export function BookFormModal({
   open,
@@ -89,6 +103,10 @@ export function BookFormModal({
   const [lookupStatus, setLookupStatus] = useState<BookLookupStatus | null>(null);
   const [lookupMessage, setLookupMessage] = useState<string | null>(null);
   const [lookupCached, setLookupCached] = useState(false);
+  const [lookupDiagnostics, setLookupDiagnostics] = useState<
+    ProviderAttemptDiagnostic[]
+  >([]);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [coverPreviewError, setCoverPreviewError] = useState(false);
 
   const runIsbnLookup = useCallback(async (rawIsbnToLookup: string) => {
@@ -96,6 +114,7 @@ export function BookFormModal({
     setFormError(null);
     setLookupStatus(null);
     setLookupMessage(null);
+    setLookupDiagnostics([]);
 
     const validation = normalizeIsbn(rawIsbnToLookup);
     if (!validation.valid) {
@@ -108,6 +127,8 @@ export function BookFormModal({
       const result = await lookupBookMetadata(rawIsbnToLookup);
       setLookupStatus(result.status);
       setLookupCached(Boolean(result.cached));
+      setLookupDiagnostics(result.diagnostics ?? []);
+      setShowDiagnostics(result.status === 'error');
 
       if (result.status === 'found' && result.data) {
         const meta = result.data;
@@ -195,6 +216,8 @@ export function BookFormModal({
     setLookupStatus(null);
     setLookupMessage(null);
     setLookupCached(false);
+    setLookupDiagnostics([]);
+    setShowDiagnostics(false);
     setCoverPreviewError(false);
 
     if (!editingBook && initialIsbn) {
@@ -480,12 +503,73 @@ export function BookFormModal({
               lookupMessage && (
                 <div
                   role="status"
-                  className="mt-2.5 flex items-start gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2.5 text-xs text-stone-700"
+                  className={`mt-2.5 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                    lookupStatus === 'error'
+                      ? 'border-amber-300 bg-amber-50/90 text-amber-950'
+                      : 'border-stone-200 bg-white text-stone-700'
+                  }`}
                 >
                   <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
                   <span>{lookupMessage}</span>
                 </div>
               )}
+
+            {/* Rozklikávací detail: Technický stav zdrojů */}
+            {!lookingUp && lookupDiagnostics.length > 0 && (
+              <div className="mt-2.5 rounded-xl border border-stone-200 bg-white/90 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setShowDiagnostics((prev) => !prev)}
+                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left font-medium text-stone-700 transition hover:bg-stone-50 rounded-xl"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <Wrench className="h-3.5 w-3.5 text-stone-500" />
+                    <span>
+                      Technický stav zdrojů ({lookupDiagnostics.length})
+                    </span>
+                  </span>
+                  {showDiagnostics ? (
+                    <ChevronUp className="h-4 w-4 text-stone-400" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-stone-400" />
+                  )}
+                </button>
+
+                {showDiagnostics && (
+                  <div className="border-t border-stone-100 px-3 py-2.5 space-y-2">
+                    {lookupDiagnostics.map((diag, idx) => (
+                      <div
+                        key={`${diag.providerId}-${idx}`}
+                        className="rounded-lg border border-stone-100 bg-stone-50/70 p-2"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <span className="font-semibold text-stone-800">
+                            {diag.provider}
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {diag.httpStatus !== undefined && (
+                              <span className="rounded bg-stone-200/80 px-1.5 py-0.5 font-mono text-[10px] text-stone-700">
+                                HTTP {diag.httpStatus}
+                              </span>
+                            )}
+                            <span
+                              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                                OUTCOME_BADGE_STYLES[diag.outcome]
+                              }`}
+                            >
+                              {diag.outcome}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="mt-1 text-[11px] leading-snug text-stone-600">
+                          {diag.detail}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Kontrola duplicit */}
             {duplicates.length > 0 && (

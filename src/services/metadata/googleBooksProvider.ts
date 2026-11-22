@@ -1,5 +1,9 @@
 import { cleanBookDescription } from '../../utils/text';
-import type { BookMetadata, MetadataProvider } from './MetadataProvider';
+import {
+  MetadataProviderError,
+  type BookMetadata,
+  type MetadataProvider,
+} from './MetadataProvider';
 
 interface GoogleBooksVolumeInfo {
   title?: string;
@@ -51,13 +55,51 @@ export class GoogleBooksProvider implements MetadataProvider {
     signal?: AbortSignal
   ): Promise<Partial<BookMetadata> | null> {
     const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn13)}`;
-    const response = await fetch(url, { signal });
 
-    if (!response.ok) {
-      throw new Error(`Google Books API vrátilo HTTP ${response.status}`);
+    let response: Response;
+    try {
+      response = await fetch(url, { signal });
+    } catch (err) {
+      if (signal?.aborted) {
+        throw new MetadataProviderError({
+          outcome: 'timeout',
+          detail: 'Vypršel časový limit dotazu na Google Books.',
+        });
+      }
+      throw new MetadataProviderError({
+        outcome: 'cors_or_network',
+        detail:
+          err instanceof Error
+            ? `Chyba sítě při dotazu na Google Books (${err.message}).`
+            : 'Chyba sítě při dotazu na Google Books.',
+      });
     }
 
-    const payload = (await response.json()) as GoogleBooksResponse;
+    if (!response.ok) {
+      throw new MetadataProviderError({
+        outcome: 'http_error',
+        httpStatus: response.status,
+        detail: `Google Books API vrátilo HTTP ${response.status}.`,
+      });
+    }
+
+    let payload: GoogleBooksResponse;
+    try {
+      payload = (await response.json()) as GoogleBooksResponse;
+    } catch {
+      throw new MetadataProviderError({
+        outcome: 'parse_error',
+        detail: 'Odpověď Google Books není platný JSON.',
+      });
+    }
+
+    if (!payload || typeof payload !== 'object') {
+      throw new MetadataProviderError({
+        outcome: 'parse_error',
+        detail: 'Prázdný nebo neplatný JSON objekt z Google Books.',
+      });
+    }
+
     if (!Array.isArray(payload.items) || payload.items.length === 0) {
       return null;
     }

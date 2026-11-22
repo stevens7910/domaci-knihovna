@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isCzechIsbn, lookupBookMetadata } from './bookLookupService';
-import { parseNkcrMarcXml } from './nkcrProvider';
+import { buildRequestUrl } from './corsFetch';
+import { NkcrProvider, parseNkcrMarcXml } from './nkcrProvider';
 import { ObalkyKnihProvider } from './obalkyKnihProvider';
 
 const SAMPLE_NKCR_MARCXML = `<?xml version="1.0" encoding="UTF-8"?>
@@ -50,7 +51,11 @@ const EMPTY_NKCR_MARCXML = `<?xml version="1.0" encoding="UTF-8"?>
   <zs:numberOfRecords>0</zs:numberOfRecords>
 </zs:searchRetrieveResponse>`;
 
-describe('parseNkcrMarcXml (NK ČR MARCXML parser)', () => {
+describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('správně vyparsuje reálnou MARCXML odpověď včetně oříznutí interpunkce a převodu jmen autorů', () => {
     const parsed = parseNkcrMarcXml(SAMPLE_NKCR_MARCXML, '9788073356484');
 
@@ -109,11 +114,9 @@ describe('parseNkcrMarcXml (NK ČR MARCXML parser)', () => {
       language: 'cs',
       source: 'obalkyknih',
     });
-
-    vi.unstubAllGlobals();
   });
 
-  it('pro české ISBN upřednostní paralelně NK ČR + Obálky knih a sloučí obálku i anotaci', async () => {
+  it('pro české ISBN upřednostní paralelně NK ČR + Obálky knih, sloučí obálku i anotaci a zaznamená outcome "ok"', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('aleph.nkp.cz')) {
         return {
@@ -159,6 +162,98 @@ describe('parseNkcrMarcXml (NK ČR MARCXML parser)', () => {
       source: 'nkcr',
     });
 
-    vi.unstubAllGlobals();
+    expect(result.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: 'NK ČR', outcome: 'ok', httpStatus: 200 }),
+        expect.objectContaining({ provider: 'Obálky knih', outcome: 'ok', httpStatus: 200 }),
+      ])
+    );
+  });
+
+  it('při CORS/síťové chybě bez VITE_BOOK_PROXY_URL nepoužije veřejnou proxy, zaznamená outcome "cors_or_network" a nemaskuje stav jako "not_found"', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('aleph.nkp.cz') || url.includes('obalkyknih.cz')) {
+        throw new TypeError('Failed to fetch');
+      }
+      // Google Books a Open Library vrátí prázdný výsledek (empty)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ totalItems: 0, items: [] }),
+      };
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await lookupBookMetadata('978-80-7335-648-4', {
+      skipCache: true,
+    });
+
+    // Žádný požadavek nesměl jít na veřejnou proxy allorigins.win
+    const calledUrls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(calledUrls.some((u) => u.includes('allorigins.win'))).toBe(false);
+
+    // Stav není zamaskován jako 'not_found', ale vrací 'error' s diagnostikou 'cors_or_network'
+    expect(result.status).toBe('error');
+    expect(result.message).toContain('VITE_BOOK_PROXY_URL');
+
+    const nkcrDiag = result.diagnostics.find((d) => d.providerId === 'nkcr');
+    const obalkyDiag = result.diagnostics.find((d) => d.providerId === 'obalkyknih');
+    const googleDiag = result.diagnostics.find((d) => d.providerId === 'googlebooks');
+
+    expect(nkcrDiag?.outcome).toBe('cors_or_network');
+    expect(obalkyDiag?.outcome).toBe('cors_or_network');
+    expect(googleDiag?.outcome).toBe('empty');
+  });
+
+  it('správně diagnostikuje "parse_error" při neplatném XML/JSON a "http_error" při chybovém HTTP kódu', async () => {
+    const fetchMock = vi
+      .fn()
+      // 1. NK ČR vrátí poškozené / HTML tělo místo MARCXML
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => '<html><body>Unexpected HTML gateway page</body></html>',
+      })
+      // 2. Obálky knih vrátí HTTP 503
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => 'Service Unavailable',
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await lookupBookMetadata('978-80-7335-648-4', {
+      providers: [new NkcrProvider(), new ObalkyKnihProvider()],
+      skipCache: true,
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        provider: 'NK ČR',
+        outcome: 'parse_error',
+      }),
+      expect.objectContaining({
+        provider: 'Obálky knih',
+        outcome: 'http_error',
+        httpStatus: 503,
+      }),
+    ]);
+  });
+
+  it('sestaví URL pro vlastní proxy endpoint (VITE_BOOK_PROXY_URL)', () => {
+    const built = buildRequestUrl({
+      target: 'nkcr',
+      isbn13: '9788073356484',
+      directUrl: 'https://aleph.nkp.cz/web/sru/skc?query=isb%3D9788073356484',
+      proxyBaseUrl: 'https://my-proxy.workers.dev',
+    });
+
+    expect(built.usingProxy).toBe(true);
+    expect(built.requestUrl).toContain(
+      'https://my-proxy.workers.dev?target=nkcr&isbn=9788073356484'
+    );
   });
 });

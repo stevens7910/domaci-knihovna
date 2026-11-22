@@ -1,25 +1,99 @@
+import { MetadataProviderError } from './MetadataProvider';
+
+export const BOOK_PROXY_STORAGE_KEY = 'domaci_knihovna_book_proxy_url';
+
+export type ProxyTargetId = 'nkcr' | 'obalkyknih';
+
 /**
- * Provede HTTP GET požadavek na targetUrl a při CORS / síťové chybě v prohlížeči
- * automaticky zkusí veřejný CORS proxy fallback (allorigins.win).
+ * Vrátí nakonfigurovanou URL vlastního proxy endpointu (VITE_BOOK_PROXY_URL nebo localStorage).
+ * Veřejné CORS proxy nejsou používány kvůli nespolehlivosti.
  */
-export async function fetchWithCorsFallback(
-  targetUrl: string,
-  signal?: AbortSignal
-): Promise<Response> {
+export function getConfiguredBookProxyUrl(): string | undefined {
   try {
-    const directResponse = await fetch(targetUrl, { signal });
-    if (directResponse.ok) {
-      return directResponse;
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = window.localStorage.getItem(BOOK_PROXY_STORAGE_KEY);
+      if (stored && stored.trim()) {
+        return stored.trim();
+      }
     }
-    // Pokud přímý server odpověděl např. 404/500, vrátíme jeho odpověď bez maskování
-    return directResponse;
+  } catch {
+    // Ignorovat chyby přístupu k localStorage
+  }
+
+  const envUrl = import.meta.env?.VITE_BOOK_PROXY_URL as string | undefined;
+  if (envUrl && envUrl.trim()) {
+    return envUrl.trim();
+  }
+
+  return undefined;
+}
+
+/**
+ * Sestaví URL pro dotaz přes vlastní proxy (Cloudflare Worker / Vercel funkci),
+ * nebo vrátí přímou cílovou URL, pokud vlastní proxy není nastavena.
+ */
+export function buildRequestUrl(options: {
+  target: ProxyTargetId;
+  isbn13: string;
+  directUrl: string;
+  proxyBaseUrl?: string;
+}): { requestUrl: string; usingProxy: boolean } {
+  const proxyBase = options.proxyBaseUrl ?? getConfiguredBookProxyUrl();
+  if (!proxyBase) {
+    return { requestUrl: options.directUrl, usingProxy: false };
+  }
+
+  const separator = proxyBase.includes('?') ? '&' : '?';
+  const requestUrl = `${proxyBase}${separator}target=${encodeURIComponent(
+    options.target
+  )}&isbn=${encodeURIComponent(options.isbn13)}&url=${encodeURIComponent(
+    options.directUrl
+  )}`;
+
+  return { requestUrl, usingProxy: true };
+}
+
+/**
+ * Provede HTTP GET požadavek buď přes vlastní VITE_BOOK_PROXY_URL (pokud je nastaveno),
+ * nebo přímo na cílový server.
+ * Při selhání vyhodí strukturovanou MetadataProviderError ('cors_or_network', 'http_error', 'timeout').
+ */
+export async function fetchWithBookProxy(options: {
+  target: ProxyTargetId;
+  isbn13: string;
+  directUrl: string;
+  signal?: AbortSignal;
+  proxyBaseUrl?: string;
+}): Promise<Response> {
+  const { requestUrl, usingProxy } = buildRequestUrl(options);
+
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, { signal: options.signal });
   } catch (err) {
-    // Pokud byl požadavek přerušen timeoutem / AbortControllerem, nepokračujeme
-    if (signal?.aborted) {
-      throw err;
+    if (options.signal?.aborted) {
+      throw new MetadataProviderError({
+        outcome: 'timeout',
+        detail: 'Vypršel časový limit dotazu.',
+      });
     }
 
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-    return fetch(proxyUrl, { signal });
+    const reason = err instanceof Error ? err.message : 'Network error';
+    throw new MetadataProviderError({
+      outcome: 'cors_or_network',
+      detail: usingProxy
+        ? `Chyba spojení s vlastním proxy serverem (${reason}).`
+        : `Přímý dotaz zablokován CORS politikou nebo chybou sítě (VITE_BOOK_PROXY_URL není nastaveno).`,
+    });
   }
+
+  if (!response.ok) {
+    throw new MetadataProviderError({
+      outcome: 'http_error',
+      httpStatus: response.status,
+      detail: `Server vrátil HTTP ${response.status}.`,
+    });
+  }
+
+  return response;
 }

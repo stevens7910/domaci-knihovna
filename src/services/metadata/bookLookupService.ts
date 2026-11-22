@@ -2,14 +2,19 @@ import { normalizeIsbn } from '../../utils/isbn';
 import { db, type LookupCacheEntry } from '../repository/db';
 import { customProxyProvider } from './customProxyProvider';
 import { googleBooksProvider } from './googleBooksProvider';
-import type { BookMetadata, MetadataProvider } from './MetadataProvider';
+import {
+  MetadataProviderError,
+  type BookMetadata,
+  type MetadataProvider,
+  type ProviderAttemptDiagnostic,
+} from './MetadataProvider';
 import { nkcrProvider } from './nkcrProvider';
 import { obalkyKnihProvider } from './obalkyKnihProvider';
 import { openLibraryProvider } from './openLibraryProvider';
 
 export const METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dní
 export const DEFAULT_PROVIDER_TIMEOUT_MS = 5000; // 5 000 ms
-const CURRENT_CACHE_VERSION = 2;
+const CURRENT_CACHE_VERSION = 3;
 
 export type BookLookupStatus = 'found' | 'not_found' | 'offline' | 'error';
 
@@ -18,6 +23,7 @@ export interface BookLookupResult {
   data?: Partial<BookMetadata>;
   message?: string;
   cached?: boolean;
+  diagnostics: ProviderAttemptDiagnostic[];
 }
 
 export interface LookupBookOptions {
@@ -104,29 +110,121 @@ export async function clearMetadataCache(): Promise<void> {
   }
 }
 
+function summarizeFoundFields(partial: Partial<BookMetadata>): string {
+  const fields: string[] = [];
+  if (partial.title) fields.push(`název „${partial.title}“`);
+  if (partial.authors && partial.authors.length > 0) fields.push('autoři');
+  if (partial.coverUrl) fields.push('obálka');
+  if (partial.description) fields.push('anotace');
+  if (partial.pageCount) fields.push(`${partial.pageCount} stran`);
+  return fields.length > 0
+    ? `Vráceno: ${fields.join(', ')}.`
+    : 'Vrácena částečná metadata.';
+}
+
 /**
- * Zavolá jednoho poskytovatele metadat s časovým limitem (AbortController).
+ * Zavolá jednoho poskytovatele metadat s časovým limitem (AbortController)
+ * a vždy vrátí strukturovaný diagnostický záznam pokusu.
  */
-async function fetchFromProviderWithTimeout(
+async function executeProviderAttempt(
   provider: MetadataProvider,
   isbn13: string,
   timeoutMs: number
-): Promise<Partial<BookMetadata> | null> {
+): Promise<{
+  data: Partial<BookMetadata> | null;
+  diagnostic: ProviderAttemptDiagnostic;
+}> {
+  const startedAt = Date.now();
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
       controller.abort();
-      reject(new Error(`Timeout (${timeoutMs} ms) u zdroje ${provider.displayName}`));
+      reject(
+        new MetadataProviderError({
+          outcome: 'timeout',
+          detail: `Vypršel časový limit (${timeoutMs} ms).`,
+        })
+      );
     }, timeoutMs);
   });
 
   try {
-    return await Promise.race([
+    const partial = await Promise.race([
       provider.fetchByIsbn(isbn13, controller.signal),
       timeoutPromise,
     ]);
+    const durationMs = Date.now() - startedAt;
+
+    if (partial) {
+      return {
+        data: partial,
+        diagnostic: {
+          providerId: provider.id,
+          provider: provider.displayName,
+          outcome: 'ok',
+          httpStatus: 200,
+          detail: summarizeFoundFields(partial),
+          durationMs,
+        },
+      };
+    }
+
+    return {
+      data: null,
+      diagnostic: {
+        providerId: provider.id,
+        provider: provider.displayName,
+        outcome: 'empty',
+        httpStatus: 200,
+        detail: 'Kniha nebyla v tomto zdroji nalezena (0 záznamů).',
+        durationMs,
+      },
+    };
+  } catch (err) {
+    const durationMs = Date.now() - startedAt;
+
+    if (err instanceof MetadataProviderError) {
+      return {
+        data: null,
+        diagnostic: {
+          providerId: provider.id,
+          provider: provider.displayName,
+          outcome: err.outcome,
+          httpStatus: err.httpStatus,
+          detail: err.detail,
+          durationMs,
+        },
+      };
+    }
+
+    const message = err instanceof Error ? err.message : 'Chyba spojení se zdrojem.';
+    const isHttpMatch = message.match(/HTTP\s+(\d{3})/i);
+    if (isHttpMatch) {
+      return {
+        data: null,
+        diagnostic: {
+          providerId: provider.id,
+          provider: provider.displayName,
+          outcome: 'http_error',
+          httpStatus: Number.parseInt(isHttpMatch[1], 10),
+          detail: message,
+          durationMs,
+        },
+      };
+    }
+
+    return {
+      data: null,
+      diagnostic: {
+        providerId: provider.id,
+        provider: provider.displayName,
+        outcome: controller.signal.aborted ? 'timeout' : 'cors_or_network',
+        detail: message,
+        durationMs,
+      },
+    };
   } finally {
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
@@ -208,6 +306,7 @@ export async function lookupBookMetadata(
     return {
       status: 'error',
       message: normalized.error,
+      diagnostics: [],
     };
   }
 
@@ -224,6 +323,14 @@ export async function lookupBookMetadata(
           isbn10: cached.isbn10 ?? isbn10,
         },
         cached: true,
+        diagnostics: [
+          {
+            providerId: cached.source ?? 'googlebooks',
+            provider: 'Lokální mezipaměť (IndexedDB)',
+            outcome: 'ok',
+            detail: 'Načteno z lokální 7denní cache.',
+          },
+        ],
       };
     }
   }
@@ -232,16 +339,15 @@ export async function lookupBookMetadata(
     return {
       status: 'offline',
       message: 'Zařízení je momentálně offline – knihu můžete doplnit ručně.',
+      diagnostics: [],
     };
   }
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
+  const diagnostics: ProviderAttemptDiagnostic[] = [];
   let merged: Partial<BookMetadata> | null = null;
-  let errorCount = 0;
-  let respondedCount = 0;
 
   if (options.providers) {
-    // Vlastní seznam providerů (např. z unit testů) běží sekvenčně v daném pořadí
     const activeProviders = options.providers.filter((p) =>
       typeof p.isEnabled === 'function' ? p.isEnabled() : true
     );
@@ -250,18 +356,10 @@ export async function lookupBookMetadata(
       if (hasCompleteMetadata(merged)) {
         break;
       }
-      try {
-        const partial = await fetchFromProviderWithTimeout(
-          provider,
-          isbn13,
-          timeoutMs
-        );
-        respondedCount++;
-        if (partial) {
-          merged = mergeBookMetadata(merged, partial);
-        }
-      } catch {
-        errorCount++;
+      const attempt = await executeProviderAttempt(provider, isbn13, timeoutMs);
+      diagnostics.push(attempt.diagnostic);
+      if (attempt.data) {
+        merged = mergeBookMetadata(merged, attempt.data);
       }
     }
   } else if (isCzechIsbn(isbn13)) {
@@ -272,20 +370,16 @@ export async function lookupBookMetadata(
       obalkyKnihProvider,
     ];
 
-    const czechSettled = await Promise.allSettled(
+    const czechAttempts = await Promise.all(
       czechProviders.map((provider) =>
-        fetchFromProviderWithTimeout(provider, isbn13, timeoutMs)
+        executeProviderAttempt(provider, isbn13, timeoutMs)
       )
     );
 
-    for (const outcome of czechSettled) {
-      if (outcome.status === 'fulfilled') {
-        respondedCount++;
-        if (outcome.value) {
-          merged = mergeBookMetadata(merged, outcome.value);
-        }
-      } else {
-        errorCount++;
+    for (const attempt of czechAttempts) {
+      diagnostics.push(attempt.diagnostic);
+      if (attempt.data) {
+        merged = mergeBookMetadata(merged, attempt.data);
       }
     }
 
@@ -300,18 +394,10 @@ export async function lookupBookMetadata(
         if (hasCompleteMetadata(merged)) {
           break;
         }
-        try {
-          const partial = await fetchFromProviderWithTimeout(
-            provider,
-            isbn13,
-            timeoutMs
-          );
-          respondedCount++;
-          if (partial) {
-            merged = mergeBookMetadata(merged, partial);
-          }
-        } catch {
-          errorCount++;
+        const attempt = await executeProviderAttempt(provider, isbn13, timeoutMs);
+        diagnostics.push(attempt.diagnostic);
+        if (attempt.data) {
+          merged = mergeBookMetadata(merged, attempt.data);
         }
       }
     }
@@ -328,18 +414,10 @@ export async function lookupBookMetadata(
       if (hasCompleteMetadata(merged)) {
         break;
       }
-      try {
-        const partial = await fetchFromProviderWithTimeout(
-          provider,
-          isbn13,
-          timeoutMs
-        );
-        respondedCount++;
-        if (partial) {
-          merged = mergeBookMetadata(merged, partial);
-        }
-      } catch {
-        errorCount++;
+      const attempt = await executeProviderAttempt(provider, isbn13, timeoutMs);
+      diagnostics.push(attempt.diagnostic);
+      if (attempt.data) {
+        merged = mergeBookMetadata(merged, attempt.data);
       }
     }
   }
@@ -358,6 +436,7 @@ export async function lookupBookMetadata(
       status: 'found',
       data: finalData,
       cached: false,
+      diagnostics,
     };
   }
 
@@ -365,19 +444,51 @@ export async function lookupBookMetadata(
     return {
       status: 'offline',
       message: 'Zařízení je momentálně offline – knihu můžete doplnit ručně.',
+      diagnostics,
     };
   }
 
-  if (errorCount > 0 && respondedCount === 0) {
+  const failedDiagnostics = diagnostics.filter(
+    (d) => d.outcome !== 'ok' && d.outcome !== 'empty'
+  );
+  const corsOrNetworkFailures = diagnostics.filter(
+    (d) => d.outcome === 'cors_or_network'
+  );
+
+  // Pokud selhaly všechny zdroje, nebo u českého ISBN selhal český katalog kvůli CORS/síti/chybě
+  const czechPrimaryFailed =
+    isCzechIsbn(isbn13) &&
+    diagnostics.some(
+      (d) =>
+        (d.providerId === 'nkcr' || d.providerId === 'obalkyknih') &&
+        d.outcome !== 'ok' &&
+        d.outcome !== 'empty'
+    );
+
+  if (
+    (failedDiagnostics.length > 0 &&
+      failedDiagnostics.length === diagnostics.length) ||
+    czechPrimaryFailed
+  ) {
+    const failedNames = failedDiagnostics
+      .map((d) => `${d.provider} (${d.outcome})`)
+      .join(', ');
+
+    const message =
+      corsOrNetworkFailures.length > 0
+        ? `Nepodařilo se spojit s knižními databázemi (${failedNames}). Přímý dotaz z prohlížeče byl zablokován CORS nebo chybou sítě – nastavte vlastní proxy endpoint (VITE_BOOK_PROXY_URL) nebo knihu vyplňte ručně.`
+        : `Nepodařilo se spojit s knižními databázemi (${failedNames}). Knihu můžete doplnit ručně.`;
+
     return {
       status: 'error',
-      message:
-        'Nepodařilo se spojit s knižními databázemi (vypršel časový limit nebo došlo k chybě sítě). Knihu můžete doplnit ručně.',
+      message,
+      diagnostics,
     };
   }
 
   return {
     status: 'not_found',
     message: 'Kniha nebyla v databázích nalezena – můžete ji doplnit ručně.',
+    diagnostics,
   };
 }
