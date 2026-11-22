@@ -243,7 +243,20 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
     ]);
   });
 
-  it('sestaví URL pro vlastní proxy endpoint (VITE_BOOK_PROXY_URL)', () => {
+  it('sestaví výchozí /api/proxy URL i vlastní VITE_BOOK_PROXY_URL', () => {
+    const defaultBuilt = buildRequestUrl({
+      target: 'nkcr',
+      isbn13: '9788073356484',
+      directUrl: 'https://aleph.nkp.cz/web/sru/skc?query=isb%3D9788073356484',
+    });
+
+    expect(defaultBuilt.usingProxy).toBe(true);
+    expect(defaultBuilt.requestUrl).toBe(
+      `/api/proxy?url=${encodeURIComponent(
+        'https://aleph.nkp.cz/web/sru/skc?query=isb%3D9788073356484'
+      )}`
+    );
+
     const built = buildRequestUrl({
       target: 'nkcr',
       isbn13: '9788073356484',

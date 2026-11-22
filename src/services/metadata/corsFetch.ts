@@ -4,14 +4,17 @@ import {
 } from './MetadataProvider';
 
 export const BOOK_PROXY_STORAGE_KEY = 'domaci_knihovna_book_proxy_url';
+export const DEFAULT_BOOK_PROXY_URL = '/api/proxy';
 
 export type ProxyTargetId = 'nkcr' | 'obalkyknih';
 
 /**
- * Vrátí nakonfigurovanou URL vlastního proxy endpointu (VITE_BOOK_PROXY_URL nebo localStorage).
- * Veřejné CORS proxy nejsou používány kvůli nespolehlivosti.
+ * Vrátí URL proxy endpointu:
+ * 1. Volitelné přepsání z localStorage (domaci_knihovna_book_proxy_url)
+ * 2. Proměnná prostředí VITE_BOOK_PROXY_URL (pokud je definovaná)
+ * 3. Výchozí same-origin endpoint "/api/proxy" (Vercel Serverless Function / lokální Vite dev middleware)
  */
-export function getConfiguredBookProxyUrl(): string | undefined {
+export function getConfiguredBookProxyUrl(): string {
   try {
     if (typeof window !== 'undefined' && window.localStorage) {
       const stored = window.localStorage.getItem(BOOK_PROXY_STORAGE_KEY);
@@ -28,12 +31,11 @@ export function getConfiguredBookProxyUrl(): string | undefined {
     return envUrl.trim();
   }
 
-  return undefined;
+  return DEFAULT_BOOK_PROXY_URL;
 }
 
 /**
- * Sestaví URL pro dotaz přes vlastní proxy (Cloudflare Worker / Vercel funkci),
- * nebo vrátí přímou cílovou URL, pokud vlastní proxy není nastavena.
+ * Sestaví URL pro dotaz přes proxy endpoint (/api/proxy?url=... nebo vlastní VITE_BOOK_PROXY_URL).
  */
 export function buildRequestUrl(options: {
   target: ProxyTargetId;
@@ -41,10 +43,9 @@ export function buildRequestUrl(options: {
   directUrl: string;
   proxyBaseUrl?: string;
 }): { requestUrl: string; usingProxy: boolean } {
-  const proxyBase = (options.proxyBaseUrl ?? getConfiguredBookProxyUrl())?.replace(
-    /\/+$/,
-    ''
-  );
+  const rawBase = options.proxyBaseUrl ?? getConfiguredBookProxyUrl();
+  const proxyBase = rawBase.replace(/\/+$/, '');
+
   if (!proxyBase) {
     return { requestUrl: options.directUrl, usingProxy: false };
   }
@@ -58,8 +59,7 @@ export function buildRequestUrl(options: {
 }
 
 /**
- * Provede HTTP GET požadavek buď přes vlastní VITE_BOOK_PROXY_URL (pokud je nastaveno),
- * nebo přímo na cílový server.
+ * Provede HTTP GET požadavek přes nakonfigurovaný proxy endpoint (výchozí /api/proxy).
  * Při selhání vyhodí strukturovanou MetadataProviderError ('cors_or_network', 'http_error', 'timeout')
  * včetně prvních 200 znaků odpovědi/chyby pro mobilní diagnostiku.
  */
@@ -94,8 +94,8 @@ export async function fetchWithBookProxy(options: {
       requestUrl,
       responseSnippet: createResponseSnippet(reason),
       detail: usingProxy
-        ? `Chyba spojení s vlastním proxy serverem (${reason}).`
-        : `Přímý dotaz zablokován CORS politikou nebo chybou sítě (VITE_BOOK_PROXY_URL není nastaveno).`,
+        ? `Chyba spojení s proxy endpointem (${reason}).`
+        : `Přímý dotaz zablokován CORS politikou nebo chybou sítě (${reason}).`,
     });
   }
 

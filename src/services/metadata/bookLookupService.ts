@@ -497,7 +497,7 @@ export async function lookupBookMetadata(
 
     const message =
       corsOrNetworkFailures.length > 0
-        ? `Nepodařilo se spojit s knižními databázemi (${failedNames}). Přímý dotaz z prohlížeče byl zablokován CORS nebo chybou sítě – nastavte vlastní proxy endpoint (VITE_BOOK_PROXY_URL) nebo knihu vyplňte ručně.`
+        ? `Nepodařilo se spojit s knižními databázemi (${failedNames}). Zkontrolujte dostupnost proxy endpointu (/api/proxy nebo VITE_BOOK_PROXY_URL), nebo knihu vyplňte ručně.`
         : `Nepodařilo se spojit s knižními databázemi (${failedNames}). Knihu můžete doplnit ručně.`;
 
     return {
