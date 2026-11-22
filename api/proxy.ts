@@ -4,8 +4,11 @@ const ALLOWED_HOSTS = new Set([
   'www.knihovny.cz',
   'aleph.nkp.cz',
   'cache.obalkyknih.cz',
+  'www.obalkyknih.cz',
   'covers.openlibrary.org',
   'openlibrary.org',
+  'books.google.com',
+  'books.googleusercontent.com',
 ]);
 
 export default async function handler(
@@ -61,7 +64,10 @@ export default async function handler(
       Accept: 'application/json, application/xml, text/xml, image/*, */*',
     };
 
-    if (targetUrl.hostname === 'cache.obalkyknih.cz') {
+    if (
+      targetUrl.hostname === 'cache.obalkyknih.cz' ||
+      targetUrl.hostname === 'www.obalkyknih.cz'
+    ) {
       upstreamHeaders.Referer = 'https://www.knihovny.cz/';
     }
 

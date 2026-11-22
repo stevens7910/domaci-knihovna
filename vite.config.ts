@@ -10,8 +10,11 @@ const ALLOWED_PROXY_HOSTS = new Set([
   'www.knihovny.cz',
   'aleph.nkp.cz',
   'cache.obalkyknih.cz',
+  'www.obalkyknih.cz',
   'covers.openlibrary.org',
   'openlibrary.org',
+  'books.google.com',
+  'books.googleusercontent.com',
 ]);
 
 /**
@@ -77,7 +80,10 @@ function localBookProxyPlugin(): Plugin {
             Accept:
               'application/xml, text/xml, application/json, image/*, */*;q=0.8',
           };
-          if (parsedTarget.hostname === 'cache.obalkyknih.cz') {
+          if (
+            parsedTarget.hostname === 'cache.obalkyknih.cz' ||
+            parsedTarget.hostname === 'www.obalkyknih.cz'
+          ) {
             upstreamHeaders.Referer = 'https://www.knihovny.cz/';
           }
 

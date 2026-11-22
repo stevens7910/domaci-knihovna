@@ -43,6 +43,7 @@ import {
   normalizeIsbn,
   type IsbnSearchVariants,
 } from '../utils/isbn';
+import { BookCover } from './BookCover';
 
 interface BookFormModalProps {
   open: boolean;
@@ -116,7 +117,6 @@ export function BookFormModal({
     useState<IsbnSearchVariants | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
-  const [coverPreviewError, setCoverPreviewError] = useState(false);
 
   const runIsbnLookup = useCallback(async (rawIsbnToLookup: string) => {
     setIsbnTouched(true);
@@ -158,7 +158,6 @@ export function BookFormModal({
         if (meta.language) setLanguage(meta.language);
         if (meta.coverUrl) {
           setCoverUrl(meta.coverUrl);
-          setCoverPreviewError(false);
         }
         if (meta.description !== undefined) {
           setDescription(meta.description ?? '');
@@ -230,7 +229,6 @@ export function BookFormModal({
     setLookupDiagnostics([]);
     setLookupVariants(null);
     setShowDiagnostics(false);
-    setCoverPreviewError(false);
 
     if (!editingBook && initialIsbn) {
       void runIsbnLookup(initialIsbn);
@@ -724,13 +722,14 @@ export function BookFormModal({
 
           {/* Náhled obálky + Název a podnázev */}
           <div className="flex gap-3.5">
-            {coverUrl.trim() && !coverPreviewError && (
+            {(coverUrl.trim() || editingBook) && (
               <div className="shrink-0 pt-1">
-                <img
-                  src={coverUrl}
-                  alt="Náhled obálky"
-                  onError={() => setCoverPreviewError(true)}
-                  className="h-28 w-20 rounded-xl border border-stone-200 object-cover shadow-xs"
+                <BookCover
+                  bookId={editingBook?.id}
+                  isbn13={isbnValidation.valid ? isbnValidation.isbn13 : undefined}
+                  title={title || 'Náhled knihy'}
+                  coverUrl={coverUrl.trim() || undefined}
+                  className="h-28 w-20"
                 />
               </div>
             )}
@@ -931,7 +930,6 @@ export function BookFormModal({
               value={coverUrl}
               onChange={(e) => {
                 setCoverUrl(e.target.value);
-                setCoverPreviewError(false);
               }}
               placeholder="https://…"
               className="mt-1 w-full rounded-xl border border-stone-200 px-3.5 py-2 text-sm focus:border-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-700/15"

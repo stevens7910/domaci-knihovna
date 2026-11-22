@@ -10,16 +10,16 @@ export interface LookupCacheEntry {
 }
 
 export interface CoverCacheEntry {
-  isbn13: string;
+  bookId: string;
   blob: Blob;
   mimeType: string;
-  savedAt: number;
+  updatedAt: string;
 }
 
 export class HomeLibraryDatabase extends Dexie {
   books!: EntityTable<Book, 'id'>;
   lookupCache!: EntityTable<LookupCacheEntry, 'isbn13'>;
-  covers!: EntityTable<CoverCacheEntry, 'isbn13'>;
+  covers!: EntityTable<CoverCacheEntry, 'bookId'>;
 
   constructor() {
     super('DomaciKnihovnaDB');
@@ -37,6 +37,19 @@ export class HomeLibraryDatabase extends Dexie {
       books: 'id, isbn13, title, *authors, location, shelfTag, readingStatus, createdAt, updatedAt',
       lookupCache: 'isbn13, expiresAt',
       covers: 'isbn13, savedAt',
+    });
+
+    // Bezpečná migrace primárního klíče tabulky covers z isbn13 na bookId bez smazání tabulky books
+    this.version(4).stores({
+      books: 'id, isbn13, title, *authors, location, shelfTag, readingStatus, createdAt, updatedAt',
+      lookupCache: 'isbn13, expiresAt',
+      covers: null,
+    });
+
+    this.version(5).stores({
+      books: 'id, isbn13, title, *authors, location, shelfTag, readingStatus, createdAt, updatedAt',
+      lookupCache: 'isbn13, expiresAt',
+      covers: 'bookId, updatedAt',
     });
   }
 }

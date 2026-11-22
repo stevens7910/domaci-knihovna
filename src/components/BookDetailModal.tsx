@@ -206,6 +206,7 @@ export function BookDetailModal({
             {/* Hlavní info */}
             <div className="flex gap-4">
               <BookCover
+                bookId={book.id}
                 isbn13={book.isbn13}
                 title={book.title}
                 authors={book.authors}

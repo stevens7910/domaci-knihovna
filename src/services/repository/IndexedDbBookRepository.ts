@@ -1,9 +1,10 @@
 import type { Book, NewBookInput, UpdateBookInput } from '../../types';
 import { generateUuid } from '../../utils/backup';
 import {
-  cacheBookCover,
-  deleteCoverIfUnused,
-} from '../covers/coverCacheService';
+  backfillMissingCovers,
+  deleteLocalCover,
+  downloadAndStoreCover,
+} from '../coverService';
 import type { BookRepository, ImportMode, ImportSummary } from './BookRepository';
 import { db, type HomeLibraryDatabase } from './db';
 
@@ -41,7 +42,7 @@ export class IndexedDbBookRepository implements BookRepository {
     await this.database.books.add(book);
 
     if (book.coverUrl) {
-      void cacheBookCover(book.isbn13, book.coverUrl);
+      void downloadAndStoreCover(book.id, book.coverUrl);
     }
 
     return book;
@@ -71,19 +72,17 @@ export class IndexedDbBookRepository implements BookRepository {
     await this.database.books.put(updated);
 
     if (updated.coverUrl && updated.coverUrl !== existing.coverUrl) {
-      void cacheBookCover(updated.isbn13, updated.coverUrl);
+      void downloadAndStoreCover(updated.id, updated.coverUrl);
+    } else if (!updated.coverUrl && existing.coverUrl) {
+      void deleteLocalCover(updated.id);
     }
 
     return updated;
   }
 
   async delete(id: string): Promise<void> {
-    const existing = await this.database.books.get(id);
     await this.database.books.delete(id);
-
-    if (existing) {
-      await deleteCoverIfUnused(existing.isbn13);
-    }
+    await deleteLocalCover(id);
   }
 
   async importBooks(books: Book[], mode: ImportMode): Promise<ImportSummary> {
@@ -132,11 +131,9 @@ export class IndexedDbBookRepository implements BookRepository {
       }
     );
 
-    for (const book of books) {
-      if (book.coverUrl) {
-        void cacheBookCover(book.isbn13, book.coverUrl);
-      }
-    }
+    // Na pozadí dotáhne chybějící obálky podle coverUrl pro všechna importovaná data
+    const allBooksAfterImport = await this.database.books.toArray();
+    void backfillMissingCovers(allBooksAfterImport);
 
     return { added, updated, skipped };
   }

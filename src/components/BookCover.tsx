@@ -1,12 +1,14 @@
 import { Book as BookIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
-  cacheBookCover,
-  getCachedCoverBlob,
-} from '../services/covers/coverCacheService';
+  buildProxiedCoverUrl,
+  downloadAndStoreCover,
+  getLocalCoverBlob,
+} from '../services/coverService';
 
 interface BookCoverProps {
-  isbn13: string;
+  bookId?: string;
+  isbn13?: string;
   title: string;
   authors?: string[];
   coverUrl?: string;
@@ -22,15 +24,23 @@ const COVER_PALETTES = [
   'bg-indigo-100 text-indigo-900 border-indigo-200',
 ];
 
-function getPaletteForBook(isbn13: string): string {
+function getPaletteForSeed(seed: string): string {
   let hash = 0;
-  for (let i = 0; i < isbn13.length; i++) {
-    hash = (hash * 31 + isbn13.charCodeAt(i)) % COVER_PALETTES.length;
+  for (let i = 0; i < seed.length; i++) {
+    hash = (hash * 31 + seed.charCodeAt(i)) % COVER_PALETTES.length;
   }
   return COVER_PALETTES[Math.abs(hash) % COVER_PALETTES.length];
 }
 
+function getTitleInitials(title: string): string {
+  const words = title.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return 'BK';
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0] ?? ''}${words[1][0] ?? ''}`.toUpperCase();
+}
+
 export function BookCover({
+  bookId,
   isbn13,
   title,
   authors,
@@ -38,16 +48,23 @@ export function BookCover({
   className = 'h-28 w-20',
 }: BookCoverProps) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [remoteFailed, setRemoteFailed] = useState(false);
+  const [proxyFailed, setProxyFailed] = useState(false);
+  const [directFailed, setDirectFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
     let createdUrl: string | null = null;
 
-    setRemoteFailed(false);
+    setProxyFailed(false);
+    setDirectFailed(false);
+
+    if (!bookId) {
+      setObjectUrl(null);
+      return;
+    }
 
     void (async () => {
-      const localBlob = await getCachedCoverBlob(isbn13);
+      const localBlob = await getLocalCoverBlob(bookId);
       if (!active) return;
 
       if (localBlob) {
@@ -58,11 +75,15 @@ export function BookCover({
 
       setObjectUrl(null);
 
-      // Pokud lokálně není a máme URL + jsme online, stáhneme na pozadí pro příští offline použití
-      if (coverUrl && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
-        const cached = await cacheBookCover(isbn13, coverUrl);
-        if (cached && active) {
-          const freshBlob = await getCachedCoverBlob(isbn13);
+      // Pokud lokální Blob ještě neexistuje a jsme online, stáhneme a uložíme jej na pozadí
+      if (
+        coverUrl &&
+        coverUrl.trim() &&
+        (typeof navigator === 'undefined' || navigator.onLine !== false)
+      ) {
+        const stored = await downloadAndStoreCover(bookId, coverUrl);
+        if (stored && active) {
+          const freshBlob = await getLocalCoverBlob(bookId);
           if (freshBlob && active) {
             createdUrl = URL.createObjectURL(freshBlob);
             setObjectUrl(createdUrl);
@@ -77,20 +98,32 @@ export function BookCover({
         URL.revokeObjectURL(createdUrl);
       }
     };
-  }, [isbn13, coverUrl]);
+  }, [bookId, coverUrl]);
 
-  const src = objectUrl || (!remoteFailed && coverUrl ? coverUrl : null);
+  const cleanCoverUrl = coverUrl?.trim();
+  const proxiedUrl = cleanCoverUrl ? buildProxiedCoverUrl(cleanCoverUrl) : null;
 
-  if (src) {
+  let activeSrc: string | null = null;
+  if (objectUrl) {
+    activeSrc = objectUrl;
+  } else if (proxiedUrl && !proxyFailed) {
+    activeSrc = proxiedUrl;
+  } else if (cleanCoverUrl && proxiedUrl !== cleanCoverUrl && !directFailed) {
+    activeSrc = cleanCoverUrl;
+  }
+
+  if (activeSrc) {
     return (
       <img
-        src={src}
-        alt={`Obálka knihy ${title}`}
+        src={activeSrc}
+        alt={`Obálka knihy ${title || 'bez názvu'}`}
         onError={() => {
           if (objectUrl) {
             setObjectUrl(null);
+          } else if (!proxyFailed) {
+            setProxyFailed(true);
           } else {
-            setRemoteFailed(true);
+            setDirectFailed(true);
           }
         }}
         className={`${className} shrink-0 rounded-xl border border-stone-200 object-cover shadow-xs`}
@@ -99,16 +132,21 @@ export function BookCover({
     );
   }
 
+  const seed = isbn13 || bookId || title || 'book';
+
   return (
     <div
-      className={`${className} flex shrink-0 flex-col items-center justify-center rounded-xl border p-2 text-center ${getPaletteForBook(isbn13)}`}
+      className={`${className} flex shrink-0 flex-col items-center justify-center rounded-xl border p-2 text-center ${getPaletteForSeed(seed)}`}
     >
-      <BookIcon className="h-6 w-6 opacity-70" />
-      <span className="mt-1.5 line-clamp-2 text-[10px] font-semibold leading-tight opacity-85">
-        {title.slice(0, 22)}
+      <BookIcon className="h-5 w-5 opacity-65" />
+      <span className="mt-1 text-xs font-bold tracking-wider opacity-85">
+        {getTitleInitials(title)}
+      </span>
+      <span className="mt-0.5 line-clamp-2 text-[9px] font-medium leading-tight opacity-80">
+        {(title || 'Bez názvu').slice(0, 24)}
       </span>
       {authors && authors.length > 0 && (
-        <span className="mt-0.5 line-clamp-1 text-[9px] opacity-65">
+        <span className="mt-0.5 line-clamp-1 text-[8px] opacity-65">
           {authors[0]}
         </span>
       )}

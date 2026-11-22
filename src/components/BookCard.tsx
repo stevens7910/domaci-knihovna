@@ -24,8 +24,9 @@ export function BookCard({ book, onSelect, onQuickUpdate }: BookCardProps) {
       tabIndex={0}
       className="group flex cursor-pointer gap-3.5 rounded-2xl border border-stone-200/90 bg-white p-3.5 shadow-xs transition hover:border-amber-700/40 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-amber-700/30 active:scale-[0.995]"
     >
-      {/* Lokálně kešovaná obálka s fallbackem na URL a placeholder */}
+      {/* Lokálně kešovaná obálka s fallbackem na proxy URL a placeholder */}
       <BookCover
+        bookId={book.id}
         isbn13={book.isbn13}
         title={book.title}
         authors={book.authors}
