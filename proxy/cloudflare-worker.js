@@ -1,73 +1,61 @@
 /**
- * Cloudflare Worker – CORS proxy pro české knižní katalogy (NK ČR + Obálky knih)
+ * Cloudflare Worker – CORS proxy pro české i zahraniční knižní katalogy
  *
- * Nasazení:
- * 1. V Cloudflare Dashboard -> Workers & Pages -> Create Worker vložte tento skript a klikněte na Deploy.
- * 2. V projektu Domácí knihovna nastavte proměnnou prostředí:
- *    VITE_BOOK_PROXY_URL=https://vas-worker.vase-subdomena.workers.dev
+ * Podporované parametry:
+ *   GET /?url=<encodedTargetUrl>
+ *   (zpětně kompatibilní i s GET /?target=nkcr|obalkyknih&isbn=978...)
  *
- * Volání z aplikace:
- *   GET /?target=nkcr&isbn=9788073356484
- *   GET /?target=obalkyknih&isbn=9788073356484
+ * Povolené cílové domény (bezpečnostní whitelist):
+ *   - aleph.nkp.cz
+ *   - cache.obalkyknih.cz
+ *   - covers.openlibrary.org
+ *   - openlibrary.org
  */
 
-const ALLOWED_ORIGINS = ['*']; // Můžete omezit např. na ['https://stevens7910.github.io', 'http://localhost:5173']
+const ALLOWED_HOSTS = new Set([
+  'aleph.nkp.cz',
+  'cache.obalkyknih.cz',
+  'covers.openlibrary.org',
+  'openlibrary.org',
+]);
 
-function getCorsHeaders(origin) {
-  const allowOrigin =
-    ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin)
-      ? origin || '*'
-      : ALLOWED_ORIGINS[0];
+const UPSTREAM_TIMEOUT_MS = 8000;
 
-  return {
-    'Access-Control-Allow-Origin': allowOrigin,
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Accept',
-    'Access-Control-Max-Age': '86400',
-  };
-}
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Max-Age': '86400',
+};
 
-const ALLOWED_UPSTREAM_HOSTS = ['aleph.nkp.cz', 'cache.obalkyknih.cz'];
-
-function buildTargetUrl(target, isbn, rawUrlParam) {
-  if (rawUrlParam) {
+function resolveTargetUrl(searchParams) {
+  const rawUrl = searchParams.get('url');
+  if (rawUrl) {
     try {
-      const parsed = new URL(rawUrlParam);
-      if (
-        parsed.protocol === 'https:' &&
-        ALLOWED_UPSTREAM_HOSTS.includes(parsed.hostname)
-      ) {
-        return {
-          url: parsed.toString(),
-          contentType:
-            parsed.hostname === 'aleph.nkp.cz'
-              ? 'application/xml; charset=utf-8'
-              : 'application/json; charset=utf-8',
-        };
+      const parsed = new URL(rawUrl);
+      if (parsed.protocol === 'https:' && ALLOWED_HOSTS.has(parsed.hostname)) {
+        return parsed.toString();
       }
+      return null;
     } catch {
-      // Fallback na target + isbn
+      return null;
     }
   }
 
-  const cleanIsbn = String(isbn || '').replace(/[^0-9X]/gi, '');
+  // Volitelný zkrácený režim: ?target=nkcr|obalkyknih&isbn=978...
+  const target = searchParams.get('target');
+  const cleanIsbn = String(searchParams.get('isbn') || '').replace(/[^0-9X]/gi, '');
   if (!/^(978|979)\d{10}$/.test(cleanIsbn)) {
     return null;
   }
 
   if (target === 'nkcr') {
-    return {
-      url: `https://aleph.nkp.cz/web/sru/skc?version=1.1&operation=searchRetrieve&query=isb%3D${encodeURIComponent(cleanIsbn)}&recordSchema=marcxml`,
-      contentType: 'application/xml; charset=utf-8',
-    };
+    return `https://aleph.nkp.cz/web/sru/skc?version=1.1&operation=searchRetrieve&query=isb%3D${encodeURIComponent(cleanIsbn)}&recordSchema=marcxml`;
   }
 
   if (target === 'obalkyknih') {
     const multi = encodeURIComponent(JSON.stringify([{ isbn: cleanIsbn }]));
-    return {
-      url: `https://cache.obalkyknih.cz/api/books?multi=${multi}`,
-      contentType: 'application/json; charset=utf-8',
-    };
+    return `https://cache.obalkyknih.cz/api/books?multi=${multi}`;
   }
 
   return null;
@@ -75,67 +63,75 @@ function buildTargetUrl(target, isbn, rawUrlParam) {
 
 export default {
   async fetch(request) {
-    const origin = request.headers.get('Origin') || '*';
-    const corsHeaders = getCorsHeaders(origin);
-
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders });
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
     }
 
     if (request.method !== 'GET') {
       return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
         status: 405,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
       });
     }
 
     const reqUrl = new URL(request.url);
-    const target = reqUrl.searchParams.get('target');
-    const isbn = reqUrl.searchParams.get('isbn');
-    const rawUrlParam = reqUrl.searchParams.get('url');
+    const targetUrl = resolveTargetUrl(reqUrl.searchParams);
 
-    const resolved = buildTargetUrl(target, isbn, rawUrlParam);
-    if (!resolved) {
+    if (!targetUrl) {
       return new Response(
         JSON.stringify({
-          error: 'Neplatné parametry. Použijte ?target=nkcr|obalkyknih&isbn=978...',
+          error:
+            'Neplatný nebo nepovolený parametr url. Povolené domény: aleph.nkp.cz, cache.obalkyknih.cz, covers.openlibrary.org, openlibrary.org.',
         }),
         {
           status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
         }
       );
     }
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
     try {
-      const upstream = await fetch(resolved.url, {
+      const upstream = await fetch(targetUrl, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
         headers: {
-          'User-Agent': 'DomaciKnihovnaPWA/1.0 (+https://github.com/stevens7910/domaci-knihovna)',
-          Accept: resolved.contentType,
+          'User-Agent':
+            'DomaciKnihovnaPWA/1.0 (+https://github.com/stevens7910/domaci-knihovna)',
+          Accept: 'application/xml, text/xml, application/json, image/*, */*;q=0.8',
         },
       });
 
-      const body = await upstream.text();
-      return new Response(body, {
+      const contentType =
+        upstream.headers.get('Content-Type') || 'application/octet-stream';
+
+      return new Response(upstream.body, {
         status: upstream.status,
         headers: {
-          ...corsHeaders,
-          'Content-Type':
-            upstream.headers.get('Content-Type') || resolved.contentType,
-          'Cache-Control': 'public, max-age=86400',
+          ...CORS_HEADERS,
+          'Content-Type': contentType,
+          'Cache-Control': upstream.ok ? 'public, max-age=86400' : 'no-store',
         },
       });
     } catch (err) {
+      const isTimeout = err instanceof Error && err.name === 'AbortError';
       return new Response(
         JSON.stringify({
-          error: 'Chyba při komunikaci s cílovým katalogem.',
+          error: isTimeout
+            ? 'Vypršel časový limit cílového katalogu.'
+            : 'Chyba při komunikaci s cílovým katalogem.',
           detail: err instanceof Error ? err.message : String(err),
         }),
         {
-          status: 502,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: isTimeout ? 504 : 502,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json; charset=utf-8' },
         }
       );
+    } finally {
+      clearTimeout(timer);
     }
   },
 };

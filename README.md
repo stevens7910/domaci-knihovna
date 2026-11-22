@@ -52,11 +52,17 @@ Přístup ke kameře (`getUserMedia`) i instalace PWA (Service Worker) vyžaduj�
 
 České knižní katalogy (**Národní knihovna ČR – `aleph.nkp.cz`**) neposílají hlavičku `Access-Control-Allow-Origin` pro přímé dotazy z prohlížeče. Aplikace záměrně **nepoužívá nespolehlivé veřejné CORS proxy** a při selhání přímého dotazu zobrazí v detailu *„Technický stav zdrojů“* přesný diagnostický stav (`cors_or_network`, `http_error`, `parse_error`, `timeout`, `empty`, `ok`).
 
-Pro 100% spolehlivé dotazování NK ČR a Obálek knih je v [proxy/cloudflare-worker.js](proxy/cloudflare-worker.js) připravena šablona pro bezplatný **Cloudflare Worker**:
+Pro 100% spolehlivé dotazování NK ČR a Obálek knih je v [proxy/cloudflare-worker.js](proxy/cloudflare-worker.js) připravena šablona pro bezplatný **Cloudflare Worker** (s whitelistem pro `aleph.nkp.cz`, `cache.obalkyknih.cz`, `covers.openlibrary.org` a `openlibrary.org`):
 
-1. V Cloudflare Dashboardu vytvořte nový Worker a vložte kód ze souboru `proxy/cloudflare-worker.js`.
-2. Nastavte výslednou URL Workeru do proměnné prostředí `VITE_BOOK_PROXY_URL` (v `.env.local` nebo v GitHub Actions Variables):
+1. Přihlaste se do [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Workers & Pages** → **Create Worker**.
+2. Vložte obsah souboru [proxy/cloudflare-worker.js](proxy/cloudflare-worker.js) a klikněte na **Deploy**. Získáte URL typu `https://domaci-knihovna-proxy.vase-jmeno.workers.dev`.
+3. Nastavte tuto URL do GitHub repozitáře pro automatický build GitHub Pages:
+   - Otevřete na GitHubu **Settings → Secrets and variables → Actions → záložka Variables → New repository variable**.
+   - **Name:** `VITE_BOOK_PROXY_URL`
+   - **Value:** `https://domaci-knihovna-proxy.vase-jmeno.workers.dev`
+4. Spusťte znovu workflow **Nasazení PWA na GitHub Pages** (nebo pushněte změnu do `main`). Workflow automaticky předá `VITE_BOOK_PROXY_URL: ${{ vars.VITE_BOOK_PROXY_URL }}` do `npm run build`.
+5. Pro lokální vývoj můžete stejnou proměnnou přidat do `.env.local`:
    ```env
-   VITE_BOOK_PROXY_URL=https://domaci-knihovna-proxy.vase-subdomena.workers.dev
+   VITE_BOOK_PROXY_URL=https://domaci-knihovna-proxy.vase-jmeno.workers.dev
    ```
 

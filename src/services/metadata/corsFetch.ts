@@ -41,15 +41,16 @@ export function buildRequestUrl(options: {
   directUrl: string;
   proxyBaseUrl?: string;
 }): { requestUrl: string; usingProxy: boolean } {
-  const proxyBase = options.proxyBaseUrl ?? getConfiguredBookProxyUrl();
+  const proxyBase = (options.proxyBaseUrl ?? getConfiguredBookProxyUrl())?.replace(
+    /\/+$/,
+    ''
+  );
   if (!proxyBase) {
     return { requestUrl: options.directUrl, usingProxy: false };
   }
 
   const separator = proxyBase.includes('?') ? '&' : '?';
-  const requestUrl = `${proxyBase}${separator}target=${encodeURIComponent(
-    options.target
-  )}&isbn=${encodeURIComponent(options.isbn13)}&url=${encodeURIComponent(
+  const requestUrl = `${proxyBase}${separator}url=${encodeURIComponent(
     options.directUrl
   )}`;
 

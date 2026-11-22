@@ -252,8 +252,10 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
     });
 
     expect(built.usingProxy).toBe(true);
-    expect(built.requestUrl).toContain(
-      'https://my-proxy.workers.dev?target=nkcr&isbn=9788073356484'
+    expect(built.requestUrl).toBe(
+      `https://my-proxy.workers.dev?url=${encodeURIComponent(
+        'https://aleph.nkp.cz/web/sru/skc?query=isb%3D9788073356484'
+      )}`
     );
   });
 

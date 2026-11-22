@@ -36,6 +36,7 @@ jobs:
       - name: Produkční build PWA
         env:
           VITE_BASE_PATH: "./"
+          VITE_BOOK_PROXY_URL: ${{ vars.VITE_BOOK_PROXY_URL }}
         run: npm run build
 
       - name: Nahrání Pages artefaktu
