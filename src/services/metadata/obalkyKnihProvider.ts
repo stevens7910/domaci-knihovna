@@ -15,6 +15,7 @@ interface ObalkyKnihApiEntry {
   bib_title?: string;
   bib_author?: string;
   bib_year?: string;
+  csn_iso_690?: string;
   annotation?: {
     html?: string;
     source?: string;
@@ -98,7 +99,9 @@ export class ObalkyKnihProvider implements MetadataProvider {
     let description = '';
     let title: string | undefined;
     let authors: string[] | undefined;
+    let publisher: string | undefined;
     let publishedYear: number | undefined;
+    let pageCount: number | undefined;
 
     for (const rawItem of payload) {
       if (!rawItem || typeof rawItem !== 'object') continue;
@@ -124,9 +127,12 @@ export class ObalkyKnihProvider implements MetadataProvider {
       }
 
       if (!authors && entry.bib_author?.trim()) {
-        const rawAuthor = entry.bib_author.trim().replace(/,\s*$/, '');
-        if (rawAuthor) {
-          authors = [rawAuthor];
+        const parsedAuthors = entry.bib_author
+          .split(/\s*,\s*|\s*;\s*/)
+          .map((a) => a.trim())
+          .filter(Boolean);
+        if (parsedAuthors.length > 0) {
+          authors = parsedAuthors;
         }
       }
 
@@ -136,6 +142,28 @@ export class ObalkyKnihProvider implements MetadataProvider {
           const parsed = Number.parseInt(match[0], 10);
           if (parsed >= 1000 && parsed <= 2100) {
             publishedYear = parsed;
+          }
+        }
+      }
+
+      if (entry.csn_iso_690) {
+        const plainCit = cleanBookDescription(entry.csn_iso_690);
+        if (!publisher) {
+          // Typický formát ČSN ISO 690: "... Praha: Argo, 2020. ..."
+          const pubMatch = plainCit.match(/:\s*([^,:]+),\s*\d{4}/);
+          if (pubMatch?.[1]?.trim()) {
+            publisher = pubMatch[1].trim();
+          }
+        }
+        if (pageCount === undefined) {
+          const pagesMatch = plainCit.match(
+            /(\d+)\s*(?:nečíslovaných\s+)?s(?:tran|\.)/i
+          );
+          if (pagesMatch?.[1]) {
+            const parsedPages = Number.parseInt(pagesMatch[1], 10);
+            if (parsedPages > 0 && parsedPages < 10000) {
+              pageCount = parsedPages;
+            }
           }
         }
       }
@@ -153,7 +181,9 @@ export class ObalkyKnihProvider implements MetadataProvider {
 
     if (title) result.title = title;
     if (authors && authors.length > 0) result.authors = authors;
+    if (publisher) result.publisher = publisher;
     if (publishedYear !== undefined) result.publishedYear = publishedYear;
+    if (pageCount !== undefined) result.pageCount = pageCount;
     if (coverUrl) result.coverUrl = coverUrl;
     if (description) result.description = description;
 
