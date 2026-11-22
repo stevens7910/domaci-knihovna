@@ -118,7 +118,7 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
 
   it('pro české ISBN upřednostní paralelně NK ČR + Obálky knih, sloučí obálku i anotaci a zaznamená outcome "ok"', async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes('aleph.nkp.cz')) {
+      if (url.includes('knihovny.cz') || url.includes('aleph.nkp.cz')) {
         return {
           ok: true,
           status: 200,
@@ -164,7 +164,7 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
 
     expect(result.diagnostics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ provider: 'NK ČR', outcome: 'ok', httpStatus: 200 }),
+        expect.objectContaining({ provider: 'NK ČR / Knihovny.cz', outcome: 'ok', httpStatus: 200 }),
         expect.objectContaining({ provider: 'Obálky knih', outcome: 'ok', httpStatus: 200 }),
       ])
     );
@@ -172,7 +172,11 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
 
   it('při CORS/síťové chybě bez VITE_BOOK_PROXY_URL nepoužije veřejnou proxy, zaznamená outcome "cors_or_network" a nemaskuje stav jako "not_found"', async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes('aleph.nkp.cz') || url.includes('obalkyknih.cz')) {
+      if (
+        url.includes('knihovny.cz') ||
+        url.includes('aleph.nkp.cz') ||
+        url.includes('obalkyknih.cz')
+      ) {
         throw new TypeError('Failed to fetch');
       }
       // Google Books a Open Library vrátí prázdný výsledek (empty)
@@ -195,7 +199,7 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
 
     // Stav není zamaskován jako 'not_found', ale vrací 'error' s diagnostikou 'cors_or_network'
     expect(result.status).toBe('error');
-    expect(result.message).toContain('VITE_BOOK_PROXY_URL');
+    expect(result.message).toContain('/api/proxy');
 
     const nkcrDiag = result.diagnostics.find((d) => d.providerId === 'nkcr');
     const obalkyDiag = result.diagnostics.find((d) => d.providerId === 'obalkyknih');
@@ -232,7 +236,7 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
     expect(result.status).toBe('error');
     expect(result.diagnostics).toEqual([
       expect.objectContaining({
-        provider: 'NK ČR',
+        provider: 'NK ČR / Knihovny.cz',
         outcome: 'parse_error',
       }),
       expect.objectContaining({

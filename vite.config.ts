@@ -7,6 +7,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 const appVersion = `build ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 
 const ALLOWED_PROXY_HOSTS = new Set([
+  'www.knihovny.cz',
   'aleph.nkp.cz',
   'cache.obalkyknih.cz',
   'covers.openlibrary.org',
@@ -71,15 +72,20 @@ function localBookProxyPlugin(): Plugin {
         const timer = setTimeout(() => controller.abort(), 8000);
 
         try {
+          const upstreamHeaders: Record<string, string> = {
+            'User-Agent': 'DomaciKnihovnaPWA/1.0',
+            Accept:
+              'application/xml, text/xml, application/json, image/*, */*;q=0.8',
+          };
+          if (parsedTarget.hostname === 'cache.obalkyknih.cz') {
+            upstreamHeaders.Referer = 'https://www.knihovny.cz/';
+          }
+
           const upstream = await fetch(parsedTarget.toString(), {
             method: 'GET',
             redirect: 'follow',
             signal: controller.signal,
-            headers: {
-              'User-Agent': 'DomaciKnihovnaPWA/1.0',
-              Accept:
-                'application/xml, text/xml, application/json, image/*, */*;q=0.8',
-            },
+            headers: upstreamHeaders,
           });
 
           res.statusCode = upstream.status;

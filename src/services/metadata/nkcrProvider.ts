@@ -229,9 +229,172 @@ export function buildNkcrSruUrl(isbn13: string): string {
   return `https://aleph.nkp.cz/web/sru/skc?version=1.1&operation=searchRetrieve&query=${encodeURIComponent(query)}&recordSchema=marcxml`;
 }
 
+export function buildKnihovnyCzUrl(isbn13: string): string {
+  const params = [
+    `lookfor=${encodeURIComponent(isbn13)}`,
+    'type=ISN',
+    'limit=1',
+    'field[]=id',
+    'field[]=title',
+    'field[]=subTitle',
+    'field[]=authors',
+    'field[]=publishers',
+    'field[]=publicationDates',
+    'field[]=physicalDescriptions',
+    'field[]=summary',
+    'field[]=languages',
+    'field[]=isbns',
+  ].join('&');
+  return `https://www.knihovny.cz/api/v1/search?${params}`;
+}
+
+interface KnihovnyCzRecord {
+  title?: string;
+  subTitle?: string;
+  authors?: {
+    primary?: Record<string, unknown>;
+    secondary?: Record<string, unknown>;
+  };
+  publishers?: string[];
+  publicationDates?: string[];
+  physicalDescriptions?: string[];
+  summary?: string[];
+  languages?: string[];
+}
+
+interface KnihovnyCzResponse {
+  resultCount?: number;
+  records?: KnihovnyCzRecord[];
+}
+
+function cleanKnihovnyAuthor(rawName: string): string {
+  // Odstraní životní data typu ", 1970-" nebo ", 1890-1938"
+  const withoutYears = rawName
+    .replace(/,\s*\d{4}\s*[-–]\s*(?:\d{4})?\.?$/u, '')
+    .trim();
+  return formatMarcAuthorName(withoutYears);
+}
+
+export function parseKnihovnyCzJson(
+  rawJson: string,
+  isbn13: string
+): Partial<BookMetadata> | null {
+  let payload: KnihovnyCzResponse;
+  try {
+    payload = JSON.parse(rawJson) as KnihovnyCzResponse;
+  } catch {
+    throw new MetadataProviderError({
+      outcome: 'parse_error',
+      responseSnippet: rawJson,
+      detail: 'Odpověď z Knihovny.cz (NK ČR) není platný JSON.',
+    });
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    throw new MetadataProviderError({
+      outcome: 'parse_error',
+      responseSnippet: rawJson,
+      detail: 'Neplatná struktura odpovědi z Knihovny.cz (NK ČR).',
+    });
+  }
+
+  if (
+    !Array.isArray(payload.records) ||
+    payload.records.length === 0 ||
+    payload.resultCount === 0
+  ) {
+    return null;
+  }
+
+  const record = payload.records[0];
+  const title = record.title ? trimMarcPunctuation(record.title) : undefined;
+  const subtitle = record.subTitle
+    ? trimMarcPunctuation(record.subTitle)
+    : undefined;
+
+  const authors: string[] = [];
+  const primaryAuthors = record.authors?.primary
+    ? Object.keys(record.authors.primary)
+    : [];
+  const secondaryAuthors = record.authors?.secondary
+    ? Object.keys(record.authors.secondary)
+    : [];
+
+  for (const name of [...primaryAuthors, ...secondaryAuthors]) {
+    const cleaned = cleanKnihovnyAuthor(name);
+    if (cleaned && !authors.includes(cleaned)) {
+      authors.push(cleaned);
+    }
+  }
+
+  const publisher = Array.isArray(record.publishers)
+    ? record.publishers.map((p) => trimMarcPunctuation(p)).find(Boolean)
+    : undefined;
+
+  let publishedYear: number | undefined;
+  if (Array.isArray(record.publicationDates)) {
+    for (const d of record.publicationDates) {
+      const m = String(d).match(/\b(\d{4})\b/);
+      if (m) {
+        const y = Number.parseInt(m[1], 10);
+        if (y >= 1000 && y <= 2100) {
+          publishedYear = y;
+          break;
+        }
+      }
+    }
+  }
+
+  let pageCount: number | undefined;
+  if (Array.isArray(record.physicalDescriptions)) {
+    for (const desc of record.physicalDescriptions) {
+      const m =
+        String(desc).match(/(\d+)\s*(?:nečíslovaných\s+)?s(?:tran|\.)?/i) ??
+        String(desc).match(/\b(\d+)\b/);
+      if (m) {
+        const p = Number.parseInt(m[1], 10);
+        if (p > 0 && p < 10000) {
+          pageCount = p;
+          break;
+        }
+      }
+    }
+  }
+
+  let description = '';
+  if (Array.isArray(record.summary)) {
+    for (const s of record.summary) {
+      const cleaned = cleanBookDescription(s);
+      if (cleaned.length > description.length) {
+        description = cleaned;
+      }
+    }
+  }
+
+  if (!title && authors.length === 0) {
+    return null;
+  }
+
+  const result: Partial<BookMetadata> = {
+    isbn13,
+    language: 'cs',
+    source: 'nkcr',
+  };
+
+  if (title) result.title = title;
+  if (subtitle) result.subtitle = subtitle;
+  if (authors.length > 0) result.authors = authors;
+  if (publisher) result.publisher = publisher;
+  if (publishedYear !== undefined) result.publishedYear = publishedYear;
+  if (pageCount !== undefined) result.pageCount = pageCount;
+  if (description) result.description = description;
+
+  return result;
+}
+
 export class NkcrProvider implements MetadataProvider {
   readonly id = 'nkcr' as const;
-  readonly displayName = 'NK ČR';
+  readonly displayName = 'NK ČR / Knihovny.cz';
   private readonly proxyBaseUrl?: string;
 
   constructor(proxyBaseUrl?: string) {
@@ -242,7 +405,7 @@ export class NkcrProvider implements MetadataProvider {
     return buildRequestUrl({
       target: 'nkcr',
       isbn13,
-      directUrl: buildNkcrSruUrl(isbn13),
+      directUrl: buildKnihovnyCzUrl(isbn13),
       proxyBaseUrl: this.proxyBaseUrl,
     }).requestUrl;
   }
@@ -251,17 +414,22 @@ export class NkcrProvider implements MetadataProvider {
     isbn13: string,
     signal?: AbortSignal
   ): Promise<Partial<BookMetadata> | null> {
-    const sruUrl = buildNkcrSruUrl(isbn13);
+    const apiUrl = buildKnihovnyCzUrl(isbn13);
     const response = await fetchWithBookProxy({
       target: 'nkcr',
       isbn13,
-      directUrl: sruUrl,
+      directUrl: apiUrl,
       signal,
       proxyBaseUrl: this.proxyBaseUrl,
     });
 
-    const xmlText = await response.text();
-    return parseNkcrMarcXml(xmlText, isbn13);
+    const rawText = await response.text();
+    const trimmed = rawText.trim();
+    if (trimmed.startsWith('<')) {
+      return parseNkcrMarcXml(rawText, isbn13);
+    }
+
+    return parseKnihovnyCzJson(rawText, isbn13);
   }
 }
 
