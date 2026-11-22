@@ -1,6 +1,6 @@
 export type ReadingStatus = 'unread' | 'reading' | 'read' | 'lent';
 
-export type BookSource = 'manual' | 'openlibrary' | 'googlebooks' | 'nkcr';
+export type BookSource = 'manual' | 'openlibrary' | 'googlebooks' | 'nkcr' | 'obalkyknih';
 
 export interface Book {
   id: string;
@@ -49,4 +49,5 @@ export const BOOK_SOURCE_LABELS: Record<BookSource, string> = {
   openlibrary: 'Open Library',
   googlebooks: 'Google Books',
   nkcr: 'NK ČR',
+  obalkyknih: 'Obálky knih',
 };

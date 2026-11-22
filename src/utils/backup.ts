@@ -2,7 +2,7 @@ import type { Book, BookSource, LibraryBackup, ReadingStatus } from '../types';
 import { normalizeIsbn } from './isbn';
 
 const VALID_STATUSES: ReadingStatus[] = ['unread', 'reading', 'read', 'lent'];
-const VALID_SOURCES: BookSource[] = ['manual', 'openlibrary', 'googlebooks', 'nkcr'];
+const VALID_SOURCES: BookSource[] = ['manual', 'openlibrary', 'googlebooks', 'nkcr', 'obalkyknih'];
 
 export function createBackupPayload(books: Book[]): LibraryBackup {
   return {

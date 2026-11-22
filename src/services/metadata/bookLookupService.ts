@@ -3,10 +3,13 @@ import { db, type LookupCacheEntry } from '../repository/db';
 import { customProxyProvider } from './customProxyProvider';
 import { googleBooksProvider } from './googleBooksProvider';
 import type { BookMetadata, MetadataProvider } from './MetadataProvider';
+import { nkcrProvider } from './nkcrProvider';
+import { obalkyKnihProvider } from './obalkyKnihProvider';
 import { openLibraryProvider } from './openLibraryProvider';
 
 export const METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dní
 export const DEFAULT_PROVIDER_TIMEOUT_MS = 5000; // 5 000 ms
+const CURRENT_CACHE_VERSION = 2;
 
 export type BookLookupStatus = 'found' | 'not_found' | 'offline' | 'error';
 
@@ -23,23 +26,37 @@ export interface LookupBookOptions {
   skipCache?: boolean;
 }
 
-const memoryCache = new Map<string, LookupCacheEntry>();
+type VersionedCacheEntry = LookupCacheEntry & { cacheVersion?: number };
+
+const memoryCache = new Map<string, VersionedCacheEntry>();
+
+export function isCzechIsbn(isbn13: string): boolean {
+  return isbn13.startsWith('97880') || isbn13.startsWith('97980');
+}
 
 async function getCachedMetadata(isbn13: string): Promise<Partial<BookMetadata> | null> {
   const now = Date.now();
 
   const memEntry = memoryCache.get(isbn13);
   if (memEntry) {
-    if (memEntry.expiresAt > now) {
+    if (
+      memEntry.expiresAt > now &&
+      memEntry.cacheVersion === CURRENT_CACHE_VERSION &&
+      (memEntry.data.title || (memEntry.data.authors && memEntry.data.authors.length > 0))
+    ) {
       return memEntry.data;
     }
     memoryCache.delete(isbn13);
   }
 
   try {
-    const dbEntry = await db.lookupCache.get(isbn13);
+    const dbEntry = (await db.lookupCache.get(isbn13)) as VersionedCacheEntry | undefined;
     if (dbEntry) {
-      if (dbEntry.expiresAt > now) {
+      if (
+        dbEntry.expiresAt > now &&
+        dbEntry.cacheVersion === CURRENT_CACHE_VERSION &&
+        (dbEntry.data.title || (dbEntry.data.authors && dbEntry.data.authors.length > 0))
+      ) {
         memoryCache.set(isbn13, dbEntry);
         return dbEntry.data;
       }
@@ -56,12 +73,17 @@ async function setCachedMetadata(
   isbn13: string,
   data: Partial<BookMetadata>
 ): Promise<void> {
+  if (!data.title && (!data.authors || data.authors.length === 0)) {
+    return;
+  }
+
   const now = Date.now();
-  const entry: LookupCacheEntry = {
+  const entry: VersionedCacheEntry = {
     isbn13,
     data,
     cachedAt: now,
     expiresAt: now + METADATA_CACHE_TTL_MS,
+    cacheVersion: CURRENT_CACHE_VERSION,
   };
 
   memoryCache.set(isbn13, entry);
@@ -213,39 +235,112 @@ export async function lookupBookMetadata(
     };
   }
 
-  const allProviders: MetadataProvider[] = options.providers ?? [
-    customProxyProvider,
-    googleBooksProvider,
-    openLibraryProvider,
-  ];
-
-  const activeProviders = allProviders.filter((p) =>
-    typeof p.isEnabled === 'function' ? p.isEnabled() : true
-  );
-
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
-
   let merged: Partial<BookMetadata> | null = null;
   let errorCount = 0;
   let respondedCount = 0;
 
-  for (const provider of activeProviders) {
-    if (hasCompleteMetadata(merged)) {
-      break;
+  if (options.providers) {
+    // Vlastní seznam providerů (např. z unit testů) běží sekvenčně v daném pořadí
+    const activeProviders = options.providers.filter((p) =>
+      typeof p.isEnabled === 'function' ? p.isEnabled() : true
+    );
+
+    for (const provider of activeProviders) {
+      if (hasCompleteMetadata(merged)) {
+        break;
+      }
+      try {
+        const partial = await fetchFromProviderWithTimeout(
+          provider,
+          isbn13,
+          timeoutMs
+        );
+        respondedCount++;
+        if (partial) {
+          merged = mergeBookMetadata(merged, partial);
+        }
+      } catch {
+        errorCount++;
+      }
+    }
+  } else if (isCzechIsbn(isbn13)) {
+    // Pro české knihy (97880 / 97980) se nejprve paralelně ptáme NK ČR a Obálky knih
+    const czechProviders: MetadataProvider[] = [
+      ...(customProxyProvider.isEnabled() ? [customProxyProvider] : []),
+      nkcrProvider,
+      obalkyKnihProvider,
+    ];
+
+    const czechSettled = await Promise.allSettled(
+      czechProviders.map((provider) =>
+        fetchFromProviderWithTimeout(provider, isbn13, timeoutMs)
+      )
+    );
+
+    for (const outcome of czechSettled) {
+      if (outcome.status === 'fulfilled') {
+        respondedCount++;
+        if (outcome.value) {
+          merged = mergeBookMetadata(merged, outcome.value);
+        }
+      } else {
+        errorCount++;
+      }
     }
 
-    try {
-      const partial = await fetchFromProviderWithTimeout(
-        provider,
-        isbn13,
-        timeoutMs
-      );
-      respondedCount++;
-      if (partial) {
-        merged = mergeBookMetadata(merged, partial);
+    // Fallback na Google Books / Open Library, pokud české zdroje nic nenašly nebo chybí klíčová pole
+    if (!merged || !hasCompleteMetadata(merged)) {
+      const fallbackProviders: MetadataProvider[] = [
+        googleBooksProvider,
+        openLibraryProvider,
+      ];
+
+      for (const provider of fallbackProviders) {
+        if (hasCompleteMetadata(merged)) {
+          break;
+        }
+        try {
+          const partial = await fetchFromProviderWithTimeout(
+            provider,
+            isbn13,
+            timeoutMs
+          );
+          respondedCount++;
+          if (partial) {
+            merged = mergeBookMetadata(merged, partial);
+          }
+        } catch {
+          errorCount++;
+        }
       }
-    } catch {
-      errorCount++;
+    }
+  } else {
+    // Pro zahraniční knihy: Google Books -> Open Library -> NK ČR
+    const foreignProviders: MetadataProvider[] = [
+      ...(customProxyProvider.isEnabled() ? [customProxyProvider] : []),
+      googleBooksProvider,
+      openLibraryProvider,
+      nkcrProvider,
+    ];
+
+    for (const provider of foreignProviders) {
+      if (hasCompleteMetadata(merged)) {
+        break;
+      }
+      try {
+        const partial = await fetchFromProviderWithTimeout(
+          provider,
+          isbn13,
+          timeoutMs
+        );
+        respondedCount++;
+        if (partial) {
+          merged = mergeBookMetadata(merged, partial);
+        }
+      } catch {
+        errorCount++;
+      }
     }
   }
 
