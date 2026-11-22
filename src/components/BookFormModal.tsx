@@ -36,7 +36,11 @@ import {
   type NewBookInput,
   type ReadingStatus,
 } from '../types';
-import { formatIsbn13, normalizeIsbn } from '../utils/isbn';
+import {
+  formatIsbn13,
+  normalizeIsbn,
+  type IsbnSearchVariants,
+} from '../utils/isbn';
 
 interface BookFormModalProps {
   open: boolean;
@@ -106,6 +110,8 @@ export function BookFormModal({
   const [lookupDiagnostics, setLookupDiagnostics] = useState<
     ProviderAttemptDiagnostic[]
   >([]);
+  const [lookupVariants, setLookupVariants] =
+    useState<IsbnSearchVariants | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [coverPreviewError, setCoverPreviewError] = useState(false);
 
@@ -115,6 +121,7 @@ export function BookFormModal({
     setLookupStatus(null);
     setLookupMessage(null);
     setLookupDiagnostics([]);
+    setLookupVariants(null);
 
     const validation = normalizeIsbn(rawIsbnToLookup);
     if (!validation.valid) {
@@ -128,6 +135,7 @@ export function BookFormModal({
       setLookupStatus(result.status);
       setLookupCached(Boolean(result.cached));
       setLookupDiagnostics(result.diagnostics ?? []);
+      setLookupVariants(result.isbnVariants ?? null);
       setShowDiagnostics(result.status === 'error');
 
       if (result.status === 'found' && result.data) {
@@ -217,6 +225,7 @@ export function BookFormModal({
     setLookupMessage(null);
     setLookupCached(false);
     setLookupDiagnostics([]);
+    setLookupVariants(null);
     setShowDiagnostics(false);
     setCoverPreviewError(false);
 
@@ -537,6 +546,32 @@ export function BookFormModal({
 
                 {showDiagnostics && (
                   <div className="border-t border-stone-100 px-3 py-2.5 space-y-2">
+                    {lookupVariants && (
+                      <div className="rounded-lg border border-amber-200/70 bg-amber-50/40 p-2 text-[11px] text-stone-700">
+                        <p className="font-semibold text-stone-800">
+                          Vygenerované varianty ISBN pro dotazy:
+                        </p>
+                        <div className="mt-1 flex flex-wrap gap-1.5 font-mono text-[10px]">
+                          <span className="rounded bg-white px-1.5 py-0.5 border border-stone-200">
+                            isbn13: {lookupVariants.isbn13}
+                          </span>
+                          <span className="rounded bg-white px-1.5 py-0.5 border border-stone-200">
+                            isbn13h: {lookupVariants.isbn13Hyphenated}
+                          </span>
+                          {lookupVariants.isbn10 && (
+                            <span className="rounded bg-white px-1.5 py-0.5 border border-stone-200">
+                              isbn10: {lookupVariants.isbn10}
+                            </span>
+                          )}
+                          {lookupVariants.isbn10Hyphenated && (
+                            <span className="rounded bg-white px-1.5 py-0.5 border border-stone-200">
+                              isbn10h: {lookupVariants.isbn10Hyphenated}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     {lookupDiagnostics.map((diag, idx) => (
                       <div
                         key={`${diag.providerId}-${idx}`}
@@ -564,6 +599,11 @@ export function BookFormModal({
                         <p className="mt-1 text-[11px] leading-snug text-stone-600">
                           {diag.detail}
                         </p>
+                        {diag.requestUrl && (
+                          <p className="mt-1 break-all font-mono text-[10px] text-stone-400">
+                            Dotaz: {decodeURIComponent(diag.requestUrl)}
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>

@@ -1,4 +1,8 @@
-import { normalizeIsbn } from '../../utils/isbn';
+import {
+  getIsbnSearchVariants,
+  normalizeIsbn,
+  type IsbnSearchVariants,
+} from '../../utils/isbn';
 import { db, type LookupCacheEntry } from '../repository/db';
 import { customProxyProvider } from './customProxyProvider';
 import { googleBooksProvider } from './googleBooksProvider';
@@ -23,6 +27,7 @@ export interface BookLookupResult {
   data?: Partial<BookMetadata>;
   message?: string;
   cached?: boolean;
+  isbnVariants?: IsbnSearchVariants;
   diagnostics: ProviderAttemptDiagnostic[];
 }
 
@@ -135,6 +140,7 @@ async function executeProviderAttempt(
   diagnostic: ProviderAttemptDiagnostic;
 }> {
   const startedAt = Date.now();
+  const requestUrl = provider.getRequestUrl?.(isbn13);
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -144,6 +150,7 @@ async function executeProviderAttempt(
       reject(
         new MetadataProviderError({
           outcome: 'timeout',
+          requestUrl,
           detail: `Vypršel časový limit (${timeoutMs} ms).`,
         })
       );
@@ -165,6 +172,7 @@ async function executeProviderAttempt(
           provider: provider.displayName,
           outcome: 'ok',
           httpStatus: 200,
+          requestUrl,
           detail: summarizeFoundFields(partial),
           durationMs,
         },
@@ -178,6 +186,7 @@ async function executeProviderAttempt(
         provider: provider.displayName,
         outcome: 'empty',
         httpStatus: 200,
+        requestUrl,
         detail: 'Kniha nebyla v tomto zdroji nalezena (0 záznamů).',
         durationMs,
       },
@@ -193,6 +202,7 @@ async function executeProviderAttempt(
           provider: provider.displayName,
           outcome: err.outcome,
           httpStatus: err.httpStatus,
+          requestUrl: err.requestUrl ?? requestUrl,
           detail: err.detail,
           durationMs,
         },
@@ -209,6 +219,7 @@ async function executeProviderAttempt(
           provider: provider.displayName,
           outcome: 'http_error',
           httpStatus: Number.parseInt(isHttpMatch[1], 10),
+          requestUrl,
           detail: message,
           durationMs,
         },
@@ -221,6 +232,7 @@ async function executeProviderAttempt(
         providerId: provider.id,
         provider: provider.displayName,
         outcome: controller.signal.aborted ? 'timeout' : 'cors_or_network',
+        requestUrl,
         detail: message,
         durationMs,
       },
@@ -311,6 +323,7 @@ export async function lookupBookMetadata(
   }
 
   const { isbn13, isbn10 } = normalized;
+  const isbnVariants = getIsbnSearchVariants(isbn13) ?? undefined;
 
   if (!options.skipCache) {
     const cached = await getCachedMetadata(isbn13);
@@ -323,6 +336,7 @@ export async function lookupBookMetadata(
           isbn10: cached.isbn10 ?? isbn10,
         },
         cached: true,
+        isbnVariants,
         diagnostics: [
           {
             providerId: cached.source ?? 'googlebooks',
@@ -339,6 +353,7 @@ export async function lookupBookMetadata(
     return {
       status: 'offline',
       message: 'Zařízení je momentálně offline – knihu můžete doplnit ručně.',
+      isbnVariants,
       diagnostics: [],
     };
   }
@@ -436,6 +451,7 @@ export async function lookupBookMetadata(
       status: 'found',
       data: finalData,
       cached: false,
+      isbnVariants,
       diagnostics,
     };
   }
@@ -444,6 +460,7 @@ export async function lookupBookMetadata(
     return {
       status: 'offline',
       message: 'Zařízení je momentálně offline – knihu můžete doplnit ručně.',
+      isbnVariants,
       diagnostics,
     };
   }
@@ -482,6 +499,7 @@ export async function lookupBookMetadata(
     return {
       status: 'error',
       message,
+      isbnVariants,
       diagnostics,
     };
   }
@@ -489,6 +507,7 @@ export async function lookupBookMetadata(
   return {
     status: 'not_found',
     message: 'Kniha nebyla v databázích nalezena – můžete ji doplnit ručně.',
+    isbnVariants,
     diagnostics,
   };
 }

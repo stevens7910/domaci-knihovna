@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cleanIsbn,
   formatIsbn13,
+  getIsbnSearchVariants,
   isbn10ToIsbn13,
   isValidIsbn10,
   isValidIsbn13,
@@ -120,11 +121,44 @@ describe('normalizeIsbn', () => {
 });
 
 describe('formatIsbn13', () => {
-  it('zformátuje 13místné ISBN pro zobrazení', () => {
-    expect(formatIsbn13('9788025732823')).toBe('978-80-2573-282-3');
+  it('zformátuje 13místné české ISBN podle oficiálních rozsahů isbn3', () => {
+    expect(formatIsbn13('9788025732823')).toBe('978-80-257-3282-3');
+    expect(formatIsbn13('9788025739549')).toBe('978-80-257-3954-9');
   });
 
   it('vrátí původní řetězec, pokud nemá 13 číslic', () => {
     expect(formatIsbn13('12345')).toBe('12345');
+  });
+});
+
+describe('EAN-13+5 a getIsbnSearchVariants', () => {
+  it('ořízne 18místný čárový kód (EAN-13 + 5místný cenový doplněk EAN-5) na prvních 13 číslic', () => {
+    expect(cleanIsbn('978802573954900399')).toBe('9788025739549');
+    const normalized = normalizeIsbn('978802573954900399');
+    expect(normalized).toEqual({
+      valid: true,
+      isbn13: '9788025739549',
+      originalType: 'isbn13',
+    });
+  });
+
+  it('vygeneruje všechny vyhledávací varianty pro české ISBN (bez pomlček, s pomlčkami, ISBN-10)', () => {
+    const variants = getIsbnSearchVariants('978802573954900399');
+    expect(variants).toEqual({
+      isbn13: '9788025739549',
+      isbn13Hyphenated: '978-80-257-3954-9',
+      isbn10: '8025739546',
+      isbn10Hyphenated: '80-257-3954-6',
+      allUnique: [
+        '9788025739549',
+        '978-80-257-3954-9',
+        '8025739546',
+        '80-257-3954-6',
+      ],
+    });
+  });
+
+  it('vrátí null pro neplatné ISBN', () => {
+    expect(getIsbnSearchVariants('978-80-257-3954-0')).toBeNull();
   });
 });

@@ -50,11 +50,15 @@ export class GoogleBooksProvider implements MetadataProvider {
   readonly id = 'googlebooks' as const;
   readonly displayName = 'Google Books';
 
+  getRequestUrl(isbn13: string): string {
+    return `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn13)}`;
+  }
+
   async fetchByIsbn(
     isbn13: string,
     signal?: AbortSignal
   ): Promise<Partial<BookMetadata> | null> {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn13)}`;
+    const url = this.getRequestUrl(isbn13);
 
     let response: Response;
     try {

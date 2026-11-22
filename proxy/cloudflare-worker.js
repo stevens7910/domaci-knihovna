@@ -27,7 +27,29 @@ function getCorsHeaders(origin) {
   };
 }
 
-function buildTargetUrl(target, isbn) {
+const ALLOWED_UPSTREAM_HOSTS = ['aleph.nkp.cz', 'cache.obalkyknih.cz'];
+
+function buildTargetUrl(target, isbn, rawUrlParam) {
+  if (rawUrlParam) {
+    try {
+      const parsed = new URL(rawUrlParam);
+      if (
+        parsed.protocol === 'https:' &&
+        ALLOWED_UPSTREAM_HOSTS.includes(parsed.hostname)
+      ) {
+        return {
+          url: parsed.toString(),
+          contentType:
+            parsed.hostname === 'aleph.nkp.cz'
+              ? 'application/xml; charset=utf-8'
+              : 'application/json; charset=utf-8',
+        };
+      }
+    } catch {
+      // Fallback na target + isbn
+    }
+  }
+
   const cleanIsbn = String(isbn || '').replace(/[^0-9X]/gi, '');
   if (!/^(978|979)\d{10}$/.test(cleanIsbn)) {
     return null;
@@ -70,8 +92,9 @@ export default {
     const reqUrl = new URL(request.url);
     const target = reqUrl.searchParams.get('target');
     const isbn = reqUrl.searchParams.get('isbn');
+    const rawUrlParam = reqUrl.searchParams.get('url');
 
-    const resolved = buildTargetUrl(target, isbn);
+    const resolved = buildTargetUrl(target, isbn, rawUrlParam);
     if (!resolved) {
       return new Response(
         JSON.stringify({

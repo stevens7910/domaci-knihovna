@@ -2,8 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isCzechIsbn, lookupBookMetadata } from './bookLookupService';
 import { buildRequestUrl } from './corsFetch';
-import { NkcrProvider, parseNkcrMarcXml } from './nkcrProvider';
-import { ObalkyKnihProvider } from './obalkyKnihProvider';
+import { buildNkcrSruQuery, NkcrProvider, parseNkcrMarcXml } from './nkcrProvider';
+import { buildObalkyKnihUrl, ObalkyKnihProvider } from './obalkyKnihProvider';
 
 const SAMPLE_NKCR_MARCXML = `<?xml version="1.0" encoding="UTF-8"?>
 <zs:searchRetrieveResponse xmlns:zs="http://www.loc.gov/zing/srw/">
@@ -255,5 +255,16 @@ describe('parseNkcrMarcXml & diagnostika českých zdrojů', () => {
     expect(built.requestUrl).toContain(
       'https://my-proxy.workers.dev?target=nkcr&isbn=9788073356484'
     );
+  });
+
+  it('sestaví SRU dotaz s OR pro všechny varianty ISBN a multi pole pro Obálky knih s isbn13 i isbn10', () => {
+    const query = buildNkcrSruQuery('9788025739549');
+    expect(query).toBe(
+      'isb="9788025739549" OR isb="978-80-257-3954-9" OR isb="8025739546" OR isb="80-257-3954-6"'
+    );
+
+    const obalkyUrl = decodeURIComponent(buildObalkyKnihUrl('9788025739549'));
+    expect(obalkyUrl).toContain('{"isbn":"9788025739549"}');
+    expect(obalkyUrl).toContain('{"isbn":"8025739546"}');
   });
 });

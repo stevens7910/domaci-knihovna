@@ -1,5 +1,6 @@
+import { getIsbnSearchVariants } from '../../utils/isbn';
 import { cleanBookDescription } from '../../utils/text';
-import { fetchWithBookProxy } from './corsFetch';
+import { buildRequestUrl, fetchWithBookProxy } from './corsFetch';
 import { sanitizeHttpsUrl } from './googleBooksProvider';
 import {
   MetadataProviderError,
@@ -20,6 +21,16 @@ interface ObalkyKnihApiEntry {
   };
 }
 
+export function buildObalkyKnihUrl(isbn13: string): string {
+  const variants = getIsbnSearchVariants(isbn13);
+  const queries: Array<{ isbn: string }> = [{ isbn: variants?.isbn13 ?? isbn13 }];
+  if (variants?.isbn10) {
+    queries.push({ isbn: variants.isbn10 });
+  }
+  const multiParam = encodeURIComponent(JSON.stringify(queries));
+  return `https://cache.obalkyknih.cz/api/books?multi=${multiParam}`;
+}
+
 export class ObalkyKnihProvider implements MetadataProvider {
   readonly id = 'obalkyknih' as const;
   readonly displayName = 'Obálky knih';
@@ -29,12 +40,20 @@ export class ObalkyKnihProvider implements MetadataProvider {
     this.proxyBaseUrl = proxyBaseUrl;
   }
 
+  getRequestUrl(isbn13: string): string {
+    return buildRequestUrl({
+      target: 'obalkyknih',
+      isbn13,
+      directUrl: buildObalkyKnihUrl(isbn13),
+      proxyBaseUrl: this.proxyBaseUrl,
+    }).requestUrl;
+  }
+
   async fetchByIsbn(
     isbn13: string,
     signal?: AbortSignal
   ): Promise<Partial<BookMetadata> | null> {
-    const multiParam = encodeURIComponent(JSON.stringify([{ isbn: isbn13 }]));
-    const apiUrl = `https://cache.obalkyknih.cz/api/books?multi=${multiParam}`;
+    const apiUrl = buildObalkyKnihUrl(isbn13);
     const response = await fetchWithBookProxy({
       target: 'obalkyknih',
       isbn13,
@@ -49,6 +68,7 @@ export class ObalkyKnihProvider implements MetadataProvider {
     } catch {
       throw new MetadataProviderError({
         outcome: 'parse_error',
+        requestUrl: this.getRequestUrl(isbn13),
         detail: 'Odpověď ze serveru Obálky knih není platný JSON.',
       });
     }
@@ -56,6 +76,7 @@ export class ObalkyKnihProvider implements MetadataProvider {
     if (!Array.isArray(payload)) {
       throw new MetadataProviderError({
         outcome: 'parse_error',
+        requestUrl: this.getRequestUrl(isbn13),
         detail: 'Očekáváno JSON pole ze serveru Obálky knih.',
       });
     }
@@ -64,38 +85,50 @@ export class ObalkyKnihProvider implements MetadataProvider {
       return null;
     }
 
-    const entry = payload[0] as ObalkyKnihApiEntry | undefined;
-    if (!entry || typeof entry !== 'object') {
-      return null;
-    }
-
-    const coverUrl = sanitizeHttpsUrl(
-      entry.cover_preview510_url ||
-        entry.cover_medium_url ||
-        entry.cover_thumbnail_url
-    );
-
-    const description = entry.annotation?.html
-      ? cleanBookDescription(entry.annotation.html)
-      : '';
-
-    const title = entry.bib_title?.trim();
-
+    // Sloučíme dostupná data ze všech vrácených záznamů (isbn13 i případně isbn10)
+    let coverUrl: string | undefined;
+    let description = '';
+    let title: string | undefined;
     let authors: string[] | undefined;
-    if (entry.bib_author && entry.bib_author.trim()) {
-      const rawAuthor = entry.bib_author.trim().replace(/,\s*$/, '');
-      if (rawAuthor) {
-        authors = [rawAuthor];
-      }
-    }
-
     let publishedYear: number | undefined;
-    if (entry.bib_year) {
-      const match = String(entry.bib_year).match(/\d{4}/);
-      if (match) {
-        const parsed = Number.parseInt(match[0], 10);
-        if (parsed >= 1000 && parsed <= 2100) {
-          publishedYear = parsed;
+
+    for (const rawItem of payload) {
+      if (!rawItem || typeof rawItem !== 'object') continue;
+      const entry = rawItem as ObalkyKnihApiEntry;
+
+      if (!coverUrl) {
+        coverUrl = sanitizeHttpsUrl(
+          entry.cover_preview510_url ||
+            entry.cover_medium_url ||
+            entry.cover_thumbnail_url
+        );
+      }
+
+      if (entry.annotation?.html) {
+        const cleaned = cleanBookDescription(entry.annotation.html);
+        if (cleaned.length > description.length) {
+          description = cleaned;
+        }
+      }
+
+      if (!title && entry.bib_title?.trim()) {
+        title = entry.bib_title.trim();
+      }
+
+      if (!authors && entry.bib_author?.trim()) {
+        const rawAuthor = entry.bib_author.trim().replace(/,\s*$/, '');
+        if (rawAuthor) {
+          authors = [rawAuthor];
+        }
+      }
+
+      if (publishedYear === undefined && entry.bib_year) {
+        const match = String(entry.bib_year).match(/\d{4}/);
+        if (match) {
+          const parsed = Number.parseInt(match[0], 10);
+          if (parsed >= 1000 && parsed <= 2100) {
+            publishedYear = parsed;
+          }
         }
       }
     }

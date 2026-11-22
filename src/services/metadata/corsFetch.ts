@@ -74,6 +74,7 @@ export async function fetchWithBookProxy(options: {
     if (options.signal?.aborted) {
       throw new MetadataProviderError({
         outcome: 'timeout',
+        requestUrl,
         detail: 'Vypršel časový limit dotazu.',
       });
     }
@@ -81,6 +82,7 @@ export async function fetchWithBookProxy(options: {
     const reason = err instanceof Error ? err.message : 'Network error';
     throw new MetadataProviderError({
       outcome: 'cors_or_network',
+      requestUrl,
       detail: usingProxy
         ? `Chyba spojení s vlastním proxy serverem (${reason}).`
         : `Přímý dotaz zablokován CORS politikou nebo chybou sítě (VITE_BOOK_PROXY_URL není nastaveno).`,
@@ -91,6 +93,7 @@ export async function fetchWithBookProxy(options: {
     throw new MetadataProviderError({
       outcome: 'http_error',
       httpStatus: response.status,
+      requestUrl,
       detail: `Server vrátil HTTP ${response.status}.`,
     });
   }

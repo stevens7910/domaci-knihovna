@@ -1,3 +1,5 @@
+import ISBN from 'isbn3';
+
 export interface NormalizedIsbnSuccess {
   valid: true;
   isbn13: string;
@@ -12,15 +14,31 @@ export interface NormalizedIsbnFailure {
 
 export type NormalizedIsbnResult = NormalizedIsbnSuccess | NormalizedIsbnFailure;
 
+export interface IsbnSearchVariants {
+  isbn13: string;
+  isbn13Hyphenated: string;
+  isbn10?: string;
+  isbn10Hyphenated?: string;
+  allUnique: string[];
+}
+
 /**
  * Odstraní mezery, pomlčky, volitelný prefix "ISBN" a převede písmena na velká (kvůli kontrolnímu znaku 'X').
+ * Pokud vstup obsahuje 18 číslic začínajících 978 nebo 979 (EAN-13 + 5místný cenový doplněk EAN-5),
+ * automaticky ořízne posledních 5 číslic a vrátí prvních 13.
  */
 export function cleanIsbn(input: string): string {
-  return input
+  const cleaned = input
     .trim()
     .replace(/^isbn(?:-?(?:10|13))?[\s:]+/i, '')
     .replace(/[\s-]+/g, '')
     .toUpperCase();
+
+  if (/^(978|979)\d{15}$/.test(cleaned)) {
+    return cleaned.slice(0, 13);
+  }
+
+  return cleaned;
 }
 
 /**
@@ -105,7 +123,7 @@ export function isbn13ToIsbn10(input: string): string | null {
 }
 
 /**
- * Normalizuje a validuje vstupní ISBN-10, ISBN-13 nebo knižní EAN-13.
+ * Normalizuje a validuje vstupní ISBN-10, ISBN-13 nebo knižní EAN-13 (včetně 18místného EAN-13+5).
  * Vrací normalizované 13místné ISBN-13 (bez pomlček) a případně původní ISBN-10.
  */
 export function normalizeIsbn(input: string): NormalizedIsbnResult {
@@ -186,11 +204,53 @@ export function normalizeIsbn(input: string): NormalizedIsbnResult {
 
 /**
  * Zformátuje normalizované 13místné ISBN pro čitelnější zobrazení v UI.
+ * Používá oficiální rozsahy z knihovny isbn3 (včetně českého 978-80).
  */
 export function formatIsbn13(isbn13: string): string {
   const cleaned = cleanIsbn(isbn13);
   if (cleaned.length !== 13) {
     return isbn13;
   }
+
+  const hyphenated = ISBN.hyphenate(cleaned);
+  if (hyphenated) {
+    return hyphenated;
+  }
+
   return `${cleaned.slice(0, 3)}-${cleaned.slice(3, 5)}-${cleaned.slice(5, 9)}-${cleaned.slice(9, 12)}-${cleaned.slice(12)}`;
+}
+
+/**
+ * Vrátí všechny vyhledávací varianty platného ISBN (ISBN-13 bez pomlček i s oficiálními pomlčkami,
+ * a pro prefix 978 také ISBN-10 bez pomlček i s pomlčkami).
+ */
+export function getIsbnSearchVariants(rawInput: string): IsbnSearchVariants | null {
+  const normalized = normalizeIsbn(rawInput);
+  if (!normalized.valid) {
+    return null;
+  }
+
+  const { isbn13 } = normalized;
+  const parsed = ISBN.parse(isbn13);
+
+  const isbn13Hyphenated =
+    parsed?.isbn13h || ISBN.hyphenate(isbn13) || formatIsbn13(isbn13);
+
+  const isbn10 = normalized.isbn10 ?? isbn13ToIsbn10(isbn13) ?? undefined;
+  const isbn10Hyphenated = isbn10
+    ? parsed?.isbn10h || ISBN.hyphenate(isbn10) || undefined
+    : undefined;
+
+  const uniqueSet = new Set<string>([isbn13]);
+  if (isbn13Hyphenated) uniqueSet.add(isbn13Hyphenated);
+  if (isbn10) uniqueSet.add(isbn10);
+  if (isbn10Hyphenated) uniqueSet.add(isbn10Hyphenated);
+
+  return {
+    isbn13,
+    isbn13Hyphenated,
+    isbn10,
+    isbn10Hyphenated,
+    allUnique: Array.from(uniqueSet),
+  };
 }

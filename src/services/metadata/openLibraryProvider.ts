@@ -93,6 +93,14 @@ export class OpenLibraryProvider implements MetadataProvider {
     }
   }
 
+  getRequestUrl(isbn13: string): string {
+    const bibKey13 = `ISBN:${isbn13}`;
+    const isbn10 = isbn13ToIsbn10(isbn13);
+    const bibKey10 = isbn10 ? `ISBN:${isbn10}` : null;
+    const bibKeys = bibKey10 ? `${bibKey13},${bibKey10}` : bibKey13;
+    return `https://openlibrary.org/api/books?bibkeys=${bibKeys}&format=json&jscmd=data`;
+  }
+
   async fetchByIsbn(
     isbn13: string,
     signal?: AbortSignal
@@ -100,9 +108,7 @@ export class OpenLibraryProvider implements MetadataProvider {
     const bibKey13 = `ISBN:${isbn13}`;
     const isbn10 = isbn13ToIsbn10(isbn13);
     const bibKey10 = isbn10 ? `ISBN:${isbn10}` : null;
-    const bibKeys = bibKey10 ? `${bibKey13},${bibKey10}` : bibKey13;
-
-    const url = `https://openlibrary.org/api/books?bibkeys=${bibKeys}&format=json&jscmd=data`;
+    const url = this.getRequestUrl(isbn13);
 
     let response: Response;
     try {

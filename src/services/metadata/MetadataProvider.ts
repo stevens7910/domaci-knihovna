@@ -31,6 +31,7 @@ export interface ProviderAttemptDiagnostic {
   provider: string;
   outcome: ProviderOutcome;
   httpStatus?: number;
+  requestUrl?: string;
   detail: string;
   durationMs?: number;
 }
@@ -38,17 +39,20 @@ export interface ProviderAttemptDiagnostic {
 export class MetadataProviderError extends Error {
   readonly outcome: Exclude<ProviderOutcome, 'ok' | 'empty'>;
   readonly httpStatus?: number;
+  readonly requestUrl?: string;
   readonly detail: string;
 
   constructor(options: {
     outcome: Exclude<ProviderOutcome, 'ok' | 'empty'>;
     detail: string;
     httpStatus?: number;
+    requestUrl?: string;
   }) {
     super(options.detail);
     this.name = 'MetadataProviderError';
     this.outcome = options.outcome;
     this.httpStatus = options.httpStatus;
+    this.requestUrl = options.requestUrl;
     this.detail = options.detail;
   }
 }
@@ -60,5 +64,6 @@ export interface MetadataProvider {
   readonly id: Exclude<BookSource, 'manual'>;
   readonly displayName: string;
   isEnabled?(): boolean;
+  getRequestUrl?(isbn13: string): string;
   fetchByIsbn(isbn13: string, signal?: AbortSignal): Promise<Partial<BookMetadata> | null>;
 }

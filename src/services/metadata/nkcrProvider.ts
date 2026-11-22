@@ -1,5 +1,6 @@
+import { getIsbnSearchVariants } from '../../utils/isbn';
 import { cleanBookDescription } from '../../utils/text';
-import { fetchWithBookProxy } from './corsFetch';
+import { buildRequestUrl, fetchWithBookProxy } from './corsFetch';
 import {
   MetadataProviderError,
   type BookMetadata,
@@ -214,6 +215,17 @@ export function parseNkcrMarcXml(
   return result;
 }
 
+export function buildNkcrSruQuery(isbn13: string): string {
+  const variants = getIsbnSearchVariants(isbn13);
+  const terms = variants ? variants.allUnique : [isbn13];
+  return terms.map((variant) => `isb="${variant}"`).join(' OR ');
+}
+
+export function buildNkcrSruUrl(isbn13: string): string {
+  const query = buildNkcrSruQuery(isbn13);
+  return `https://aleph.nkp.cz/web/sru/skc?version=1.1&operation=searchRetrieve&query=${encodeURIComponent(query)}&recordSchema=marcxml`;
+}
+
 export class NkcrProvider implements MetadataProvider {
   readonly id = 'nkcr' as const;
   readonly displayName = 'NK ČR';
@@ -223,11 +235,20 @@ export class NkcrProvider implements MetadataProvider {
     this.proxyBaseUrl = proxyBaseUrl;
   }
 
+  getRequestUrl(isbn13: string): string {
+    return buildRequestUrl({
+      target: 'nkcr',
+      isbn13,
+      directUrl: buildNkcrSruUrl(isbn13),
+      proxyBaseUrl: this.proxyBaseUrl,
+    }).requestUrl;
+  }
+
   async fetchByIsbn(
     isbn13: string,
     signal?: AbortSignal
   ): Promise<Partial<BookMetadata> | null> {
-    const sruUrl = `https://aleph.nkp.cz/web/sru/skc?version=1.1&operation=searchRetrieve&query=isb%3D${encodeURIComponent(isbn13)}&recordSchema=marcxml`;
+    const sruUrl = buildNkcrSruUrl(isbn13);
     const response = await fetchWithBookProxy({
       target: 'nkcr',
       isbn13,
